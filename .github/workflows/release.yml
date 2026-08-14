@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Build web
+        run: bun run --cwd packages/app/web build
+
+      - name: Bundle worker (wrangler dry-run)
+        run: |
+          cd packages/app
+          bunx wrangler deploy --dry-run --outdir ../../.release/worker
+          cp -r migrations ../../.release/worker/migrations
+          # Ship the built dashboard as static assets for the CLI deploy
+          # (web/dist contains index.html + assets/ — copy contents so index.html
+          #  sits at the assets root, matching assets.directory = ./assets)
+          mkdir -p ../../.release/worker/assets
+          cp -r web/dist/. ../../.release/worker/assets/
+          ls -la ../../.release/worker
+          ls -la ../../.release/worker/assets
+
+      - name: Create release tarball
+        run: |
+          cd .release
+          tar -czf ../mailvault-worker.tar.gz worker
+          ls -la ../mailvault-worker.tar.gz
+
+      - name: Build CLI
+        run: bun run --cwd packages/cli build
+
+      - name: Publish CLI to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd packages/cli
+          npm config set //registry.npmjs.org/:_authToken ${NPM_TOKEN}
+          npm publish --access public
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mailvault-worker.tar.gz
+          generate_release_notes: true

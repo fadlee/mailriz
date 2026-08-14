@@ -28,6 +28,25 @@ export interface EmailMessageLike {
 
 const MAX_TEXT_LENGTH = 200_000; // safety cap for body_text in D1
 
+/** Crude HTML → plain text for snippet/body when no text part exists. */
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Read a ReadableStream (or pass through ArrayBuffer) into an ArrayBuffer. */
 async function toArrayBuffer(raw: ReadableStream | ArrayBuffer): Promise<ArrayBuffer> {
   if (raw instanceof ArrayBuffer) return raw;
@@ -96,7 +115,7 @@ export async function emailHandler(message: EmailMessageLike, env: Env): Promise
     const fromAddress = (parsed.from?.address || '').toLowerCase();
     const fromName = parsed.from?.name || '';
     const subject = (parsed.subject || '').trim().slice(0, 500);
-    const bodyText = (parsed.text || '').slice(0, MAX_TEXT_LENGTH);
+    const bodyText = (parsed.text || stripHtmlToText(parsed.html || '')).slice(0, MAX_TEXT_LENGTH);
     const bodyHtml = parsed.html || '';
 
     // 5. Sanitize + store HTML (R2), keep body_text in D1.

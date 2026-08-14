@@ -1,0 +1,27 @@
+{
+  "name": "mailvault-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json && bun run --cwd web typecheck",
+    "test": "bun test",
+    "db:migrate:local": "wrangler d1 migrations apply mailvault --local",
+    "db:migrate:remote": "wrangler d1 migrations apply mailvault --remote"
+  },
+  "dependencies": {
+    "@mailvault/shared": "workspace:*",
+    "hono": "^4",
+    "postal-mime": "^2",
+    "ulid": "^2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5",
+    "@cloudflare/workers-types": "^4",
+    "vite": "^6",
+    "wrangler": "^4"
+  }
+}

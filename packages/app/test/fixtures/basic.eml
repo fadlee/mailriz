@@ -1,0 +1,18 @@
+Received: from mail-sor-f41.google.com (209.85.220.41) by mail.rizpedia.com
+MIME-Version: 1.0
+From: Jane Doe <jane.doe@gmail.com>
+To: newsletter@rizpedia.com
+Subject: Hello from Jane
+Content-Type: text/html; charset=UTF-8
+Message-ID: <test-123@mail.gmail.com>
+Date: Mon, 12 Aug 2026 10:00:00 +0000
+
+<html>
+<body>
+<p>Hi there,</p>
+<p>This is a <b>test</b> email from Jane.</p>
+<img src="https://example.com/tracking.png" width="1" height="1" />
+<a href="https://example.com/click">Click here</a>
+<script>alert('xss')</script>
+</body>
+</html>

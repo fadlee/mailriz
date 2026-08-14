@@ -1,0 +1,48 @@
+{
+  "name": "mailvault",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": ["0 4 * * *"]
+  },
+  "vars": {
+    "ADMIN_EMAIL": "",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "TRASH_RETENTION_DAYS": "30",
+    "AUTH_MODE": "access",
+    "SESSION_PASSWORD_HASH": "",
+    "DASHBOARD_HOSTNAME": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mailvault",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RAW_BUCKET",
+      "bucket_name": "mailvault-raw",
+      "preview_bucket_name": "mailvault-raw-preview"
+    },
+    {
+      "binding": "ATTACHMENTS_BUCKET",
+      "bucket_name": "mailvault-attachments",
+      "preview_bucket_name": "mailvault-attachments-preview"
+    },
+    {
+      "binding": "HTML_BUCKET",
+      "bucket_name": "mailvault-html",
+      "preview_bucket_name": "mailvault-html-preview"
+    }
+  ]
+}

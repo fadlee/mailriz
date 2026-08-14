@@ -13,9 +13,10 @@ import pc from 'picocolors';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
 import {
   verifyToken, listAccounts, listZones,
   listD1, createD1, d1Query,
@@ -130,7 +131,12 @@ async function deployWithWrangler(opts: {
   };
   await writeFile(join(opts.releaseDir, 'wrangler.jsonc'), JSON.stringify(wranglerConfig, null, 2));
   const env = { ...process.env, CLOUDFLARE_API_TOKEN: opts.token, CLOUDFLARE_ACCOUNT_ID: opts.accountId };
-  await execFileP('bunx', ['wrangler', 'deploy'], { cwd: opts.releaseDir, env });
+  // Resolve wrangler from our own node_modules (it's a runtime dependency), so
+  // the CLI works from any directory — no global install needed.
+  const require = createRequire(import.meta.url);
+  const wranglerPkgPath = require.resolve('wrangler/package.json');
+  const wranglerBin = join(dirname(wranglerPkgPath), 'bin', 'wrangler.js');
+  await execFileP(process.execPath, [wranglerBin, 'deploy'], { cwd: opts.releaseDir, env });
 }
 
 // ---------------------------------------------------------------- setup

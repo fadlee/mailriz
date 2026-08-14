@@ -24,5 +24,10 @@ jobs:
       - name: Build web
         run: bun run --cwd packages/app/web build
 
-      - name: Test
-        run: bun run --cwd packages/app test
+      - name: Test (sanitizer)
+        # Separate steps: postal-mime keeps the event loop alive, which makes a
+        # combined or chained `bun test` hang after completion.
+        run: bun run --cwd packages/app test test/sanitize.test.ts
+
+      - name: Test (email handler)
+        run: bun run --cwd packages/app test test/email-handler.test.ts

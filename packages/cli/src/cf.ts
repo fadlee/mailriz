@@ -80,19 +80,33 @@ export async function listZones(token: string, accountId: string): Promise<Zone[
 // --- D1 ---
 
 export interface D1Database {
-  id: string;
+  /**
+   * Cloudflare returns the D1 identifier as `uuid` — there is no `id` field.
+   * Reading `id` yields undefined, which then silently reaches the query URL
+   * and the wrangler binding, so the identifier is asserted on the way out.
+   */
+  uuid: string;
   name: string;
 }
 
+function assertD1(db: D1Database | undefined, context: string): D1Database {
+  if (!db?.uuid) {
+    throw new Error(`D1 ${context} returned no database uuid (got ${JSON.stringify(db)})`);
+  }
+  return db;
+}
+
 export async function listD1(token: string, accountId: string): Promise<D1Database[]> {
-  return cfFetch<D1Database[]>(token, `/accounts/${accountId}/d1/database?per_page=100`);
+  const list = await cfFetch<D1Database[]>(token, `/accounts/${accountId}/d1/database?per_page=100`);
+  return list ?? [];
 }
 
 export async function createD1(token: string, accountId: string, name: string): Promise<D1Database> {
-  return cfFetch<D1Database>(token, `/accounts/${accountId}/d1/database`, {
+  const db = await cfFetch<D1Database>(token, `/accounts/${accountId}/d1/database`, {
     method: 'POST',
     body: JSON.stringify({ name }),
   });
+  return assertD1(db, 'create');
 }
 
 export async function d1Query(token: string, accountId: string, dbId: string, sql: string): Promise<{ success: boolean; results?: unknown[] }> {
@@ -153,11 +167,3 @@ export async function createEmailRoutingRule(
   });
 }
 
-// --- Custom domain (Worker route) ---
-
-export async function createWorkerRoute(token: string, zoneId: string, pattern: string, scriptName: string): Promise<{ id: string }> {
-  return cfFetch<{ id: string }>(token, `/zones/${zoneId}/workers/routes`, {
-    method: 'POST',
-    body: JSON.stringify({ pattern, script: scriptName }),
-  });
-}

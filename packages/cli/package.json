@@ -8,6 +8,7 @@
   "scripts": {
     "build": "bun build ./src/cli.ts --outdir dist --target node --format esm --external wrangler",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "dev": "bun run src/cli.ts"
   },
   "files": [

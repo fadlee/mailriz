@@ -541,7 +541,8 @@ async function setupAccess(token: string, accountId: string, hostname: string, a
   if (!res.ok || j?.success === false) {
     throw new Error(j?.errors?.[0]?.message || `HTTP ${res.status}`);
   }
-  const appId = j.result.id as string;
+  const appId = j.result?.id as string | undefined;
+  if (!appId) throw new Error('Access app was created but returned no id');
   // Policy
   const pres = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/access/apps/${appId}/policies`, {
     method: 'POST',

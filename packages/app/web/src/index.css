@@ -1,42 +1,134 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------- tokens
+   Matcha theme. Light is the default; [data-theme="dark"] overrides it.
+   The anti-FOUC script in index.html sets the attribute before first paint. */
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+
+  --bg: #f4f2ec;
+  --surface: #ffffff;
+  --surface-2: #faf8f2;
+  --surface-3: #efece4;
+  --border: #e9e5db;
+  --border-soft: #f0ede5;
+  --text: #1c1b19;
+  --text-dim: #6f6b64;
+  --text-faint: #9c948a;
+  --accent: #10b981;
+  --accent-ink: #ffffff;
+  --accent-strong: #0f7a52;
+  --ok: #12a06a;
+  --warn: #d98a2b;
+  --danger: #e5544b;
+  --info: #3f7ad6;
+  --nav-surface: #eaf7f0;
+  --shadow: 0 1px 2px #14120e08, 0 4px 14px #14120e0d;
 }
 
-html.dark {
+[data-theme="dark"] {
   color-scheme: dark;
+
+  --bg: #14150f;
+  --surface: #1d1e17;
+  --surface-2: #24251d;
+  --surface-3: #2e3026;
+  --border: #2f3128;
+  --border-soft: #23241d;
+  --text: #eef0e6;
+  --text-dim: #a6a89a;
+  --text-faint: #6f7266;
+  --accent: #2fd39a;
+  --accent-ink: #04140d;
+  --accent-strong: #6fe4b6;
+  --nav-surface: #1e2a22;
+  --shadow: 0 1px 2px #0000004d, 0 12px 30px #0006;
 }
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-text: var(--text);
+  --color-text-dim: var(--text-dim);
+  --color-text-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-strong: var(--accent-strong);
+  --color-nav-surface: var(--nav-surface);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-sans: "Manrope Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+
+  --radius-card: 22px;
+  --radius-control: 14px;
+  --radius-pill: 13px;
+}
+
+/* ---------------------------------------------------------------- base */
 
 body {
-  @apply bg-slate-950 text-slate-200 antialiased;
+  @apply bg-bg text-text font-sans antialiased;
   margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
 }
 
 * {
   box-sizing: border-box;
 }
 
-/* Slim scrollbars */
+/* Slim scrollbars — token-driven so they follow the theme. */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--surface-3);
   border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Email body iframe */
+/* ---------------------------------------------------------------- avatars
+   Per-sender tints. Each hue is mixed into the current surface/text tokens
+   so the swatches stay muted and legible in both themes.
+   Kept in CSS (not utility classes) because they depend on live tokens. */
+
+.avatar-0, .avatar-1, .avatar-2, .avatar-3, .avatar-4,
+.avatar-5, .avatar-6, .avatar-7, .avatar-8 {
+  background: color-mix(in oklab, var(--hue) 18%, var(--surface));
+  color: color-mix(in oklab, var(--hue) 55%, var(--text));
+}
+
+.avatar-0 { --hue: #e5544b; }
+.avatar-1 { --hue: #d98a2b; }
+.avatar-2 { --hue: #c9a227; }
+.avatar-3 { --hue: #12a06a; }
+.avatar-4 { --hue: #14a3a3; }
+.avatar-5 { --hue: #3f7ad6; }
+.avatar-6 { --hue: #6366f1; }
+.avatar-7 { --hue: #9d5cd6; }
+.avatar-8 { --hue: #d4568f; }
+
+/* Email body iframe — stays white regardless of theme, because the HTML
+   inside is the sender's and must not inherit our palette. */
 .email-frame {
   border: 0;
   width: 100%;
   min-height: 60vh;
   background: white;
   color: #0f172a;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
 }

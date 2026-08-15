@@ -21,9 +21,11 @@ export function initials(name: string): string {
   return (parts[0]![0] + parts[1]![0]).toUpperCase();
 }
 
+/** Soft tints defined in index.css. They're mixed against the theme's own
+ *  surface/text tokens, so they stay readable in both light and dark. */
 const AVATAR_COLORS = [
-  'bg-rose-500', 'bg-orange-500', 'bg-amber-500', 'bg-emerald-500',
-  'bg-teal-500', 'bg-sky-500', 'bg-indigo-500', 'bg-violet-500', 'bg-fuchsia-500',
+  'avatar-0', 'avatar-1', 'avatar-2', 'avatar-3',
+  'avatar-4', 'avatar-5', 'avatar-6', 'avatar-7', 'avatar-8',
 ];
 
 export function avatarColor(name: string): string {

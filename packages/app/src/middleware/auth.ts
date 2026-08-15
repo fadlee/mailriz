@@ -83,7 +83,13 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
     const match = cookie.split(';').map((s) => s.trim()).find((s) => s.startsWith(SESSION_COOKIE + '='));
     if (match) {
       const raw = decodeURIComponent(match.slice(SESSION_COOKIE.length + 1));
-      const [email, sig, exp] = raw.split('.');
+      // The cookie is `email.sig.exp` and the email itself usually contains
+      // dots, so read the two fixed fields off the end rather than splitting
+      // left to right — sig is hex and exp is digits, neither has a dot.
+      const parts = raw.split('.');
+      const exp = parts.pop();
+      const sig = parts.pop();
+      const email = parts.join('.');
       if (email && sig && exp) {
         const expected = await sha256Hex(`${email}.${exp}.${e.SESSION_PASSWORD_HASH || ''}`);
         if (sig === expected && Number(exp) * 1000 > Date.now()) {

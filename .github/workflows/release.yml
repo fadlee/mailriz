@@ -48,6 +48,9 @@ jobs:
 
       # The tag is the single source of truth for the published version, so a
       # release is just "push a tag" — package.json's version is a placeholder.
+      # We also strip the bun `workspace:*` devDep: npm can't parse that protocol
+      # (EUNSUPPORTEDPROTOCOL) and the shared code is already bundled into
+      # dist/cli.js, so the published manifest doesn't need it.
       - name: Set CLI version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -56,7 +59,8 @@ jobs:
             exit 1
           fi
           cd packages/cli
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm pkg set version="$VERSION"
+          npm pkg delete devDependencies.@mailriz/shared
           echo "Publishing mailriz-cli@$VERSION"
 
       - name: Publish CLI to npm

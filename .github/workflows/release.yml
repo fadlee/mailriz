@@ -70,12 +70,17 @@ jobs:
           npm pkg delete devDependencies.@mailriz/shared
           echo "Publishing mailriz-cli@$VERSION"
 
-      # Trusted publishing: npm detects the GitHub OIDC environment and exchanges
-      # it for a short-lived npm token automatically. No NPM_TOKEN secret needed.
       # Publish from a temp copy outside the repo: npm refuses to publish a
       # workspace member (ENOWORKSPACES) whenever the repo root declares
       # `workspaces`, regardless of --workspaces=false.
+      #
+      # Auth: npm CLI auto-detects the GitHub OIDC environment and exchanges it
+      # for a short-lived npm token (trusted publishing). Until the trusted
+      # publisher is configured on npmjs.com, it falls back to NODE_AUTH_TOKEN
+      # (an Automation token — automation tokens bypass the 2FA OTP prompt).
       - name: Publish CLI to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           TMP_PKG="$(mktemp -d)"
           cp -r packages/cli/. "$TMP_PKG/"

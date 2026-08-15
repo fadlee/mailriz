@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { Alias, CreateAliasInput, UpdateAliasInput, ALIAS_LOCAL_PART_RE, VAULT_DOMAIN_RE } from '@mailriz/shared';
+import { requestHost } from '../lib/host';
 import { ulid } from 'ulid';
 
 export const aliasRoutes = new Hono<AppContext>();
@@ -48,11 +49,15 @@ aliasRoutes.post('/', async (c) => {
     return c.json({ error: 'local_part must match [a-z0-9._-]{1,64}' }, 400);
   }
 
-  // Domain comes from the request Host header (the dashboard hostname),
-  // falling back to a configured domain env.
-  const host = c.req.header('Host') || '';
-  let domain = host.split(':')[0] || '';
-  if (!VAULT_DOMAIN_RE.test(domain)) domain = e.DASHBOARD_HOSTNAME || '';
+  // Aliases must live on the domain that receives mail, not the one serving
+  // the dashboard. Email Routing's catch-all is bound to the zone apex, so an
+  // alias stored against the dashboard host (inbox.example.com) can never be
+  // matched by an incoming message to example.com — it is rejected as
+  // "Address not found". Fall back to the Host header only when MAIL_DOMAIN
+  // is unset, which is the local-dev case.
+  const host = requestHost(c);
+  let domain = e.MAIL_DOMAIN || host;
+  if (!VAULT_DOMAIN_RE.test(domain)) domain = host;
 
   const id = ulid();
   try {

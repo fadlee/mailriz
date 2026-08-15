@@ -11,6 +11,12 @@ export interface Env {
   AUTH_MODE?: string;
   SESSION_PASSWORD_HASH?: string;
   DASHBOARD_HOSTNAME?: string;
+  /**
+   * The domain mail actually arrives on — the zone apex that Email Routing's
+   * catch-all serves. Distinct from DASHBOARD_HOSTNAME, which is the
+   * subdomain the UI is served from and receives no mail.
+   */
+  MAIL_DOMAIN?: string;
 }
 
 export interface AuthUser {

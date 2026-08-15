@@ -109,6 +109,8 @@ async function deployWithWrangler(opts: {
   r2Html: string;
   adminEmail: string;
   dashboardHostname: string;
+  /** Zone apex — where mail arrives. Not the dashboard hostname. */
+  mailDomain: string;
   authMode: 'access' | 'session';
   sessionHash?: string;
   accessAud?: string;
@@ -136,6 +138,7 @@ async function deployWithWrangler(opts: {
       AUTH_MODE: opts.authMode,
       SESSION_PASSWORD_HASH: opts.sessionHash || '',
       DASHBOARD_HOSTNAME: opts.dashboardHostname,
+      MAIL_DOMAIN: opts.mailDomain,
     },
     d1_databases: [
       { binding: 'DB', database_name: 'mailriz', database_id: opts.d1Id, migrations_dir: 'migrations' },
@@ -430,6 +433,16 @@ async function cmdSetup() {
   }
   tasks.ok('migrations', `${migrations.length} applied`);
 
+  // Repair aliases left on the dashboard hostname by earlier builds.
+  try {
+    const fixed = await repairAliasDomains(
+      effectiveToken, accountId, d1.uuid, dashboardHostname, zoneObj.name
+    );
+    if (fixed > 0) tasks.set('migrations', 'ok', `${migrations.length} applied · ${fixed} alias domains repaired`);
+  } catch {
+    // Best effort — a fresh install has no rows to fix.
+  }
+
   // R2.
   tasks.run('r2', 'creating 3 buckets…');
   let r2Raw, r2Att, r2Html;
@@ -483,6 +496,7 @@ async function cmdSetup() {
       r2Html: r2Html.name,
       adminEmail,
       dashboardHostname,
+      mailDomain: zoneObj.name,
       authMode,
       sessionHash,
       accessAud,
@@ -564,6 +578,35 @@ async function openUrl(url: string): Promise<void> {
   } catch {
     hint(`  could not open a browser — visit the link above`);
   }
+}
+
+/**
+ * Move aliases that were stored against the dashboard hostname onto the mail
+ * domain. Earlier builds took the domain from the request Host header, so
+ * aliases read as `name@inbox.example.com` while the catch-all only ever
+ * delivers to `example.com` — every message bounced as "Address not found".
+ *
+ * Returns how many rows were corrected.
+ */
+async function repairAliasDomains(
+  token: string,
+  accountId: string,
+  d1Id: string,
+  dashboardHostname: string,
+  mailDomain: string
+): Promise<number> {
+  if (dashboardHostname === mailDomain) return 0;
+  const escaped = (s: string) => s.replace(/'/g, "''");
+  const res = await d1Query(
+    token,
+    accountId,
+    d1Id,
+    `UPDATE aliases SET domain = '${escaped(mailDomain)}' ` +
+    `WHERE domain = '${escaped(dashboardHostname)}';` +
+    `SELECT changes() AS fixed;`
+  );
+  const rows = (res as any)?.[1]?.results ?? (res as any)?.results ?? [];
+  return Number(rows?.[0]?.fixed ?? 0);
 }
 
 /**
@@ -666,6 +709,7 @@ async function cmdUpdate() {
   const tasks = new TaskList([
     { key: 'release', label: 'release' },
     { key: 'worker', label: 'worker' },
+    { key: 'aliases', label: 'aliases' },
     { key: 'health', label: 'health' },
   ]);
   tasks.start();
@@ -695,6 +739,7 @@ async function cmdUpdate() {
       r2Html: cfg.r2_html_bucket,
       adminEmail: cfg.admin_email,
       dashboardHostname: cfg.dashboard_hostname,
+      mailDomain: cfg.zone_name,
       authMode: cfg.auth_mode,
       sessionHash: cfg.session_password_hash,
       accessAud: cfg.access_aud,
@@ -705,6 +750,23 @@ async function cmdUpdate() {
     abort(`Update failed: ${e.message}`);
   }
   tasks.ok('worker', cfg.worker_name);
+
+  // Aliases created by earlier builds sit on the dashboard hostname and can
+  // never receive mail; move them to the mail domain.
+  tasks.run('aliases', 'checking domains…');
+  try {
+    const fixed = await repairAliasDomains(
+      token, cfg.account_id, cfg.d1_database_id, cfg.dashboard_hostname, cfg.zone_name
+    );
+    tasks.ok('aliases', fixed > 0 ? `${fixed} moved to @${cfg.zone_name}` : 'already correct');
+  } catch (e: any) {
+    tasks.warn('aliases', 'could not check', {
+      title: 'Alias domains not verified',
+      body:
+        `${e.message}\n\nIf mail bounces as "Address not found", your aliases may still\n` +
+        `be stored against ${cfg.dashboard_hostname} instead of ${cfg.zone_name}.`,
+    });
+  }
 
   tasks.run('health', 'probing /healthz…');
   let healthy = false;

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * mailriz-cli — interactive deployment wizard for MailRiz.
  *

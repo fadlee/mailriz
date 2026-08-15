@@ -59,13 +59,13 @@
         "mailriz-cli": "./dist/cli.js",
       },
       "dependencies": {
-        "@clack/prompts": "^0.8",
-        "@mailriz/shared": "workspace:*",
-        "picocolors": "^1",
         "wrangler": "^4",
       },
       "devDependencies": {
+        "@clack/prompts": "^0.8",
+        "@mailriz/shared": "workspace:*",
         "@types/bun": "latest",
+        "picocolors": "^1",
         "typescript": "^5",
       },
     },

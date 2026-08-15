@@ -127,6 +127,31 @@ email simulator: `wrangler dev --test-scheduled` and the devtools "Email" panel.
 
 The CLI downloads the tarball from the latest GitHub Release at setup time.
 
+### Cutting a release
+
+One-time setup: create an **Automation** token on npmjs.com and add it to the
+repo, otherwise the publish step fails.
+
+```bash
+gh secret set NPM_TOKEN
+```
+
+After that a release is just a tag — the tag is the source of truth for the
+published version, so `packages/cli/package.json`'s version is only a
+placeholder and doesn't need bumping:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The tag must be `vX.Y.Z` (a `-beta.1`-style suffix is allowed); anything else
+fails the workflow before it publishes.
+
+`wrangler` is deliberately the CLI's only runtime dependency — it's resolved
+from `node_modules` and spawned to deploy. Everything else is bundled into
+`dist/cli.js`, so it must stay in `devDependencies`; a `workspace:*` entry in
+`dependencies` would be published verbatim and break `npm install`.
+
 ## Security notes
 
 - HTML sanitization strips `<script>`, `<form>`, `<iframe>`, `<object>`, `<embed>`,

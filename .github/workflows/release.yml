@@ -46,12 +46,29 @@ jobs:
       - name: Build CLI
         run: bun run --cwd packages/cli build
 
+      # The tag is the single source of truth for the published version, so a
+      # release is just "push a tag" — package.json's version is a placeholder.
+      - name: Set CLI version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Tag '${GITHUB_REF_NAME}' is not a semver version (expected vX.Y.Z)" >&2
+            exit 1
+          fi
+          cd packages/cli
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "Publishing mailriz-cli@$VERSION"
+
       - name: Publish CLI to npm
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN secret is not set — add it with: gh secret set NPM_TOKEN" >&2
+            exit 1
+          fi
           cd packages/cli
-          npm config set //registry.npmjs.org/:_authToken ${NPM_TOKEN}
+          npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN}"
           npm publish --access public
 
       - name: GitHub Release

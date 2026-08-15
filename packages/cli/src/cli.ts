@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
+import { showBanner, stepHeader, statusRow } from './banner';
 import {
   verifyToken, listAccounts, listZones,
   listD1, createD1, d1Query,
@@ -142,8 +143,40 @@ async function deployWithWrangler(opts: {
 
 // ---------------------------------------------------------------- setup
 
+const SCOPE_ROWS = [
+  '1. Account → Workers Scripts     → Edit',
+  '2. Account → D1                  → Edit',
+  '3. Account → Workers R2 Storage  → Edit',
+  '4. Zone    → Workers Routes      → Edit',
+  '5. Zone    → Email Routing Rules → Edit',
+  '6. Zone    → DNS                 → Edit',
+  '7. Zone    → Zone Settings       → Edit',
+];
+
 async function cmdSetup() {
-  intro(pc.bold('📬 MailRiz setup'));
+  showBanner();
+
+  // Pre-flight checks (mirrors cloakmail's opening status rows).
+  let wranglerOk = false;
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require.resolve('wrangler/package.json');
+    const bin = join(dirname(pkg), 'bin', 'wrangler.js');
+    wranglerOk = existsSync(bin);
+  } catch { wranglerOk = false; }
+  statusRow(wranglerOk, wranglerOk ? 'wrangler found' : 'wrangler NOT found (bundled with this CLI)');
+
+  let cfReachable = false;
+  try {
+    const r = await fetch('https://api.cloudflare.com/client/v4/');
+    cfReachable = r.ok || r.status === 401 || r.status === 403;
+  } catch { cfReachable = false; }
+  statusRow(cfReachable, cfReachable ? 'Cloudflare API is reachable' : 'Cloudflare API unreachable (check your network)');
+
+  const stateExists = existsSync(CONFIG_PATH);
+  statusRow(true, stateExists
+    ? `State file at ${CONFIG_PATH}`
+    : `State file will be created at ${CONFIG_PATH}`);
 
   // 1. Bun version check (minimum).
   try {
@@ -160,18 +193,48 @@ async function cmdSetup() {
   }
 
   // 2. Token.
+  stepHeader('Step 1: Cloudflare API token');
+  console.log(pc.dim('MailRiz needs a Cloudflare API token with these 7 scopes:'));
+  for (const row of SCOPE_ROWS) {
+    console.log(pc.dim(`  ${row}`));
+  }
+  const tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens?name=mailriz-cli';
+  console.log('');
+  console.log(pc.dim('Token page (token name pre-filled):'));
+  console.log(pc.dim(`  ${tokenUrl}`));
+
+  const openBrowser = (await confirm({
+    message: 'Open the Cloudflare token page in your browser now?',
+    initialValue: true,
+  })) as boolean;
+  if (isCancel(openBrowser)) process.exit(0);
+  if (openBrowser) {
+    try {
+      const { execFile } = await import('node:child_process');
+      const { promisify: p } = await import('node:util');
+      await p(execFile)('xdg-open', [tokenUrl]).catch(() => {});
+      console.log(pc.dim('  (opened — create the token, then paste it below)'));
+    } catch {
+      console.log(pc.dim(`  (could not auto-open — visit ${tokenUrl})`));
+    }
+  }
+
   const token = (await text({
     message: 'Cloudflare API Token (paste)',
-    placeholder: 'Scopes: Workers Scripts Edit, D1 Edit, R2 Edit, Email Routing Edit, Zone DNS Edit, Zone Read, Account Read',
-    validate: (v) => (v?.length > 20 ? undefined : 'Token looks too short'),
+    placeholder: 'Leave blank to use CLOUDFLARE_API_TOKEN env',
+    validate: (v) => {
+      if (v && v.length > 20) return undefined;
+      return process.env.CLOUDFLARE_API_TOKEN ? undefined : 'Token looks too short';
+    },
   })) as string;
   if (isCancel(token)) process.exit(0);
+  const effectiveToken = token || process.env.CLOUDFLARE_API_TOKEN || '';
 
   const sp = spinner();
   sp.start('Verifying token…');
   let verified;
   try {
-    verified = await verifyToken(token);
+    verified = await verifyToken(effectiveToken);
   } catch (e: any) {
     sp.stop('✗');
     fail(`Token verification failed: ${e.message}`);
@@ -179,7 +242,8 @@ async function cmdSetup() {
   sp.stop(`✓ Token OK (${verified.id})`);
 
   // 3. Account + zone selection.
-  const accounts = await listAccounts(token);
+  stepHeader('Step 2: Account & domain');
+  const accounts = await listAccounts(effectiveToken);
   if (accounts.length === 0) fail('No accounts on this token');
   let accountId: string;
   let accountObj = accounts[0]!;
@@ -196,7 +260,7 @@ async function cmdSetup() {
   }
   const sp2 = spinner();
   sp2.start('Listing zones…');
-  const zones = await listZones(token, accountId);
+  const zones = await listZones(effectiveToken, accountId);
   sp2.stop('✓');
   if (zones.length === 0) fail('No zones on this account — add a domain first');
   let zoneId: string;
@@ -214,6 +278,7 @@ async function cmdSetup() {
   }
 
   // 4. Config.
+  stepHeader('Step 3: Configuration');
   const dashboardHostname = (await text({
     message: 'Dashboard hostname',
     placeholder: `inbox.${zoneObj.name}`,
@@ -244,6 +309,7 @@ async function cmdSetup() {
   }
 
   // 5. Fetch release artifact.
+  stepHeader('Step 4: Provisioning');
   sp.start('Fetching release artifact…');
   let release: { dir: string; index: string; migrationsDir: string; assetsDir: string };
   try {
@@ -260,9 +326,9 @@ async function cmdSetup() {
 
   // 6. D1 provision.
   sp.start('Provisioning D1 database…');
-  const d1s = await listD1(token, accountId);
+  const d1s = await listD1(effectiveToken, accountId);
   let d1 = d1s.find((d) => d.name === 'mailriz');
-  if (!d1) d1 = await createD1(token, accountId, 'mailriz');
+  if (!d1) d1 = await createD1(effectiveToken, accountId, 'mailriz');
   sp.stop(`✓ D1 ${d1.id}`);
 
   // Apply migrations.
@@ -270,7 +336,7 @@ async function cmdSetup() {
   try {
     for (const m of migrations) {
       const sql = await readFile(join(release.migrationsDir, m), 'utf8');
-      await d1Query(token, accountId, d1.id, sql);
+      await d1Query(effectiveToken, accountId, d1.id, sql);
     }
   } catch (e: any) {
     sp.stop('✗');
@@ -280,10 +346,10 @@ async function cmdSetup() {
 
   // 7. R2 provision.
   sp.start('Provisioning R2 buckets…');
-  const r2s = await listR2Buckets(token, accountId);
-  const r2Raw = r2s.find((b) => b.name === 'mailriz-raw') || await createR2Bucket(token, accountId, 'mailriz-raw');
-  const r2Att = r2s.find((b) => b.name === 'mailriz-attachments') || await createR2Bucket(token, accountId, 'mailriz-attachments');
-  const r2Html = r2s.find((b) => b.name === 'mailriz-html') || await createR2Bucket(token, accountId, 'mailriz-html');
+  const r2s = await listR2Buckets(effectiveToken, accountId);
+  const r2Raw = r2s.find((b) => b.name === 'mailriz-raw') || await createR2Bucket(effectiveToken, accountId, 'mailriz-raw');
+  const r2Att = r2s.find((b) => b.name === 'mailriz-attachments') || await createR2Bucket(effectiveToken, accountId, 'mailriz-attachments');
+  const r2Html = r2s.find((b) => b.name === 'mailriz-html') || await createR2Bucket(effectiveToken, accountId, 'mailriz-html');
   sp.stop('✓ R2 ready');
 
   // 8. Deploy worker (wrangler child process with generated wrangler.jsonc).
@@ -291,7 +357,7 @@ async function cmdSetup() {
   const workerName = 'mailriz';
   try {
     await deployWithWrangler({
-      token,
+      token: effectiveToken,
       accountId,
       workerName,
       releaseDir: release.dir,
@@ -313,8 +379,8 @@ async function cmdSetup() {
   // 9. Custom domain route.
   sp.start('Binding custom domain…');
   try {
-    await createWorkerRoute(token, zoneId, `${dashboardHostname}/*`, workerName);
-    await createWorkerRoute(token, zoneId, dashboardHostname, workerName);
+    await createWorkerRoute(effectiveToken, zoneId, `${dashboardHostname}/*`, workerName);
+    await createWorkerRoute(effectiveToken, zoneId, dashboardHostname, workerName);
   } catch (e: any) {
     sp.stop('✗');
     note(`Custom domain binding failed (${e.message}). You can add a Worker route manually in the dashboard.`, 'Warning');
@@ -324,12 +390,12 @@ async function cmdSetup() {
   // 10. Email Routing.
   sp.start('Enabling Email Routing…');
   try {
-    const settings = await getEmailRoutingSettings(token, zoneId);
+    const settings = await getEmailRoutingSettings(effectiveToken, zoneId);
     if (!settings.enabled) {
-      await enableEmailRouting(token, zoneId);
+      await enableEmailRouting(effectiveToken, zoneId);
     }
     // catch-all → worker
-    await createEmailRoutingRule(token, zoneId, { type: 'all' }, { type: 'worker', value: [workerName] });
+    await createEmailRoutingRule(effectiveToken, zoneId, { type: 'all' }, { type: 'worker', value: [workerName] });
   } catch (e: any) {
     sp.stop('✗');
     note(`Email Routing setup failed (${e.message}). Enable it manually in the dashboard: Email → Email Routing → Enable, then add a catch-all rule to Worker "mailriz".`, 'Manual step needed');
@@ -341,7 +407,7 @@ async function cmdSetup() {
     sp.start('Configuring Cloudflare Access…');
     try {
       // Attempt Zero Trust app creation; if the token lacks scope, fall back to manual.
-      await setupAccess(token, accountId, dashboardHostname, adminEmail);
+      await setupAccess(effectiveToken, accountId, dashboardHostname, adminEmail);
       sp.stop('✓ Access configured');
     } catch (e: any) {
       sp.stop('⚠');
@@ -436,7 +502,8 @@ async function setupAccess(token: string, accountId: string, hostname: string, a
 // ---------------------------------------------------------------- status
 
 async function cmdStatus() {
-  intro(pc.bold('📊 MailRiz status'));
+  showBanner();
+  stepHeader('MailRiz status');
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
@@ -460,7 +527,8 @@ async function cmdStatus() {
 // ---------------------------------------------------------------- update
 
 async function cmdUpdate() {
-  intro(pc.bold('🔄 MailRiz update'));
+  showBanner();
+  stepHeader('MailRiz update');
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
@@ -510,7 +578,8 @@ async function cmdUpdate() {
 // ---------------------------------------------------------------- destroy
 
 async function cmdDestroy() {
-  intro(pc.bold('💥 MailRiz destroy'));
+  showBanner();
+  stepHeader('MailRiz destroy');
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed.');
 

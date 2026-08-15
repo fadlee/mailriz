@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'bun:test';
-import { listAccounts, listZones, listD1, createD1, listR2Buckets, createR2Bucket } from '../src/cf';
+import {
+  listAccounts, listZones, listD1, createD1, listR2Buckets, createR2Bucket,
+  setCatchAllToWorker, createAccessApp,
+} from '../src/cf';
 
 /**
  * Response-shape handling for the Cloudflare client.
@@ -78,6 +81,55 @@ describe('D1 identifier', () => {
     // sailed through and surfaced as `undefined` in the D1 binding.
     mockResult({ id: 'f4ccc0ee', name: 'mailriz' });
     await expect(createD1(TOKEN, 'a1', 'mailriz')).rejects.toThrow(/no database uuid/);
+  });
+});
+
+describe('email routing catch-all', () => {
+  it('PUTs to the catch_all path with an all-matcher and worker action', async () => {
+    let seen: { url: string; method?: string; body?: any } = { url: '' };
+    globalThis.fetch = (async (url: any, init: any) => {
+      seen = { url: String(url), method: init?.method, body: JSON.parse(init?.body || '{}') };
+      return new Response(JSON.stringify({ success: true, result: {} }), { status: 200 });
+    }) as typeof fetch;
+
+    await setCatchAllToWorker(TOKEN, 'zone1', 'mailriz');
+
+    // Posting an all-matcher to /rules is what returned "Invalid rule
+    // operation" — the catch-all has its own path and verb.
+    expect(seen.url).toEndWith('/zones/zone1/email/routing/rules/catch_all');
+    expect(seen.method).toBe('PUT');
+    expect(seen.body.matchers).toEqual([{ type: 'all' }]);
+    expect(seen.body.actions).toEqual([{ type: 'worker', value: ['mailriz'] }]);
+    expect(seen.body.enabled).toBe(true);
+  });
+});
+
+describe('access application', () => {
+  it('returns the aud tag from create', async () => {
+    mockResult({ id: 'app1', aud: 'aud-tag-1' });
+    expect(await createAccessApp(TOKEN, 'a1', 'mailriz', 'inbox.example.com')).toEqual({
+      id: 'app1',
+      aud: 'aud-tag-1',
+    } as any);
+  });
+
+  it('reads the app back when create omits the aud', async () => {
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call++;
+      const result = call === 1 ? { id: 'app1' } : { id: 'app1', aud: 'aud-tag-2' };
+      return new Response(JSON.stringify({ success: true, result }), { status: 200 });
+    }) as typeof fetch;
+
+    // An empty aud would deploy a Worker that rejects every request, so it is
+    // fetched rather than accepted as blank.
+    expect((await createAccessApp(TOKEN, 'a1', 'mailriz', 'inbox.example.com')).aud).toBe('aud-tag-2');
+    expect(call).toBe(2);
+  });
+
+  it('throws when no aud can be obtained at all', async () => {
+    mockResult({ id: 'app1' });
+    await expect(createAccessApp(TOKEN, 'a1', 'mailriz', 'inbox.example.com')).rejects.toThrow(/aud/);
   });
 });
 

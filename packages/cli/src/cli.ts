@@ -26,7 +26,8 @@ import {
   verifyToken, listAccounts, listZones,
   listD1, createD1, d1Query,
   listR2Buckets, createR2Bucket,
-  enableEmailRouting, createEmailRoutingRule, getEmailRoutingSettings,
+  enableEmailRouting, setCatchAllToWorker, getEmailRoutingSettings,
+  getAccessOrganization, createAccessApp, createAccessPolicy,
 } from './cf';
 
 const execFileP = promisify(execFile);
@@ -48,6 +49,10 @@ interface Config {
   r2_html_bucket: string;
   auth_mode: 'access' | 'session';
   session_password_hash?: string;
+  /** Persisted so `update` can redeploy without blanking the Worker's Access
+   *  vars — an empty ACCESS_AUD makes it reject every request. */
+  access_aud?: string;
+  access_team_domain?: string;
   installed_at: string;
 }
 
@@ -106,6 +111,8 @@ async function deployWithWrangler(opts: {
   dashboardHostname: string;
   authMode: 'access' | 'session';
   sessionHash?: string;
+  accessAud?: string;
+  accessTeamDomain?: string;
 }) {
   const wranglerConfig = {
     name: opts.workerName,
@@ -121,8 +128,10 @@ async function deployWithWrangler(opts: {
     routes: [{ pattern: opts.dashboardHostname, custom_domain: true }],
     vars: {
       ADMIN_EMAIL: opts.adminEmail,
-      ACCESS_TEAM_DOMAIN: '',
-      ACCESS_AUD: '',
+      // The Worker rejects every request when ACCESS_AUD is blank, so Access
+      // has to be provisioned before this deploy, not after it.
+      ACCESS_TEAM_DOMAIN: opts.accessTeamDomain || '',
+      ACCESS_AUD: opts.accessAud || '',
       TRASH_RETENTION_DAYS: '30',
       AUTH_MODE: opts.authMode,
       SESSION_PASSWORD_HASH: opts.sessionHash || '',
@@ -158,6 +167,9 @@ const SCOPE_ROWS = [
   '6. Zone    → DNS                 → Edit',
   '7. Zone    → Zone Settings       → Edit',
 ];
+
+/** Only needed for Cloudflare Access; password auth works without it. */
+const ACCESS_SCOPE_ROW = '8. Account → Access: Apps and Policies → Edit  (optional)';
 
 async function cmdSetup() {
   banner();
@@ -204,6 +216,7 @@ async function cmdSetup() {
   heading('Cloudflare API token');
   hint('MailRiz needs a token carrying these 7 scopes:');
   for (const row of SCOPE_ROWS) bullet(row);
+  bullet(ACCESS_SCOPE_ROW);
   blank();
   hint('Token page (name is pre-filled):');
   const tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens?name=mailriz-cli';
@@ -291,19 +304,47 @@ async function cmdSetup() {
     validate: (v) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v || '') ? undefined : 'Invalid email'),
   })) as string;
 
-  const useAccess = (await confirm({
-    message: 'Use Cloudflare Access for auth? (recommended)',
-    initialValue: true,
-  })) as boolean;
+  // Probe Zero Trust before offering Access. A token without that scope
+  // answers 403, and finding that out here means the choice is made before
+  // anything is deployed — rather than the run "succeeding" with an
+  // unreachable dashboard.
+  blank();
+  let teamDomain = '';
+  let accessAvailable = false;
+  try {
+    const org = await spin(
+      'zero trust',
+      () => getAccessOrganization(effectiveToken, accountId),
+      (o) => o.auth_domain || 'available'
+    );
+    teamDomain = org.auth_domain || '';
+    accessAvailable = true;
+  } catch {
+    // spin printed the failing row; explain what it means for the choice.
+    hint('  Access needs a token with Zero Trust permissions, or a Zero Trust');
+    hint('  organization on the account. Password auth works without either.');
+  }
+  blank();
+
+  const useAccess = accessAvailable
+    ? ((await confirm({
+        message: 'Use Cloudflare Access for auth? (recommended)',
+        initialValue: true,
+      })) as boolean)
+    : false;
+  if (isCancel(useAccess)) process.exit(0);
 
   let authMode: 'access' | 'session' = 'access';
   let sessionHash: string | undefined;
   if (!useAccess) {
     const pw = (await text({
-      message: 'Set a dashboard password (session fallback)',
+      message: accessAvailable
+        ? 'Set a dashboard password'
+        : 'Set a dashboard password (Access unavailable)',
       placeholder: 'min 8 chars',
       validate: (v) => (v && v.length >= 8 ? undefined : 'min 8 chars'),
     })) as string;
+    if (isCancel(pw)) process.exit(0);
     sessionHash = await sha256(pw);
     authMode = 'session';
   }
@@ -324,9 +365,11 @@ async function cmdSetup() {
     { key: 'd1', label: 'd1' },
     { key: 'migrations', label: 'migrations' },
     { key: 'r2', label: 'r2' },
+    // Access comes before the deploy: its aud tag is a Worker var, and the
+    // Worker refuses every request while that var is empty.
+    { key: 'access', label: 'access' },
     { key: 'worker', label: 'worker' },
     { key: 'routing', label: 'email routing' },
-    { key: 'access', label: 'access' },
     { key: 'health', label: 'health' },
   ]);
 
@@ -403,6 +446,29 @@ async function cmdSetup() {
   }
   tasks.ok('r2', 'raw · attachments · html');
 
+  // Access, before the deploy — its aud tag ships as a Worker var.
+  let accessAud = '';
+  if (useAccess) {
+    tasks.run('access', 'creating application…');
+    try {
+      const app = await createAccessApp(effectiveToken, accountId, 'mailriz', dashboardHostname);
+      await createAccessPolicy(effectiveToken, accountId, app.id, adminEmail);
+      accessAud = app.aud;
+      tasks.ok('access', `single-user · ${adminEmail}`);
+    } catch (e: any) {
+      // Falling through with an empty aud would deploy a Worker that rejects
+      // every request, so this is fatal rather than a warning.
+      tasks.failTask('access', e.message);
+      abort(
+        `Cloudflare Access setup failed: ${e.message}\n` +
+        `  Without it the Worker has no audience tag and would reject every request.\n` +
+        `  Re-run and choose password auth, or use a token with Zero Trust permissions.`
+      );
+    }
+  } else {
+    tasks.skip('access', 'password auth');
+  }
+
   // Worker.
   tasks.run('worker', 'deploying…');
   try {
@@ -419,6 +485,8 @@ async function cmdSetup() {
       dashboardHostname,
       authMode,
       sessionHash,
+      accessAud,
+      accessTeamDomain: teamDomain,
     });
   } catch (e: any) {
     tasks.failTask('worker', e.message);
@@ -437,43 +505,23 @@ async function cmdSetup() {
   try {
     const settings = await getEmailRoutingSettings(effectiveToken, zoneId);
     if (!settings.enabled) await enableEmailRouting(effectiveToken, zoneId);
-    await createEmailRoutingRule(effectiveToken, zoneId, { type: 'all' }, { type: 'worker', value: [workerName] });
+    await setCatchAllToWorker(effectiveToken, zoneId, workerName);
     tasks.ok('routing', `*@${zoneObj.name} → ${workerName}`);
   } catch (e: any) {
     tasks.warn('routing', 'needs manual setup', {
       title: 'Email Routing not configured — mail will not arrive yet',
-      body: `${e.message}\n\nEnable it by hand: Email → Email Routing → Enable,\nthen add a catch-all rule pointing at Worker "${workerName}".`,
+      body: `${e.message}\n\nEnable it by hand: Email → Email Routing → Enable,\nthen set the catch-all action to Worker "${workerName}".`,
     });
   }
 
-  // Access, only when the user chose it.
-  if (useAccess) {
-    tasks.run('access', 'creating application…');
-    try {
-      await setupAccess(effectiveToken, accountId, dashboardHostname, adminEmail);
-      tasks.ok('access', `single-user · ${adminEmail}`);
-    } catch (e: any) {
-      tasks.warn('access', 'needs manual setup', {
-        title: 'Cloudflare Access not configured',
-        body:
-          `${e.message}\nYour token may be missing Zero Trust permissions.\n\n` +
-          `1. Zero Trust → Access → Applications → Add an application\n` +
-          `2. Type: Self-hosted. Domain: ${dashboardHostname}\n` +
-          `3. Policy: allow only ${adminEmail}\n` +
-          `4. Save, then set Worker vars ACCESS_TEAM_DOMAIN and ACCESS_AUD.`,
-      });
-    }
-  }
-
-  // Health.
+  // Health. DNS and the edge certificate take a moment after the deploy, so
+  // give them one rather than reporting a failure that fixes itself.
   tasks.run('health', 'probing /healthz…');
-  let healthy = false;
-  try {
-    const res = await fetch(`https://${dashboardHostname}/healthz`);
-    healthy = res.ok;
-  } catch {}
+  const healthy = await probeHealth(dashboardHostname, (attempt, total) =>
+    tasks.run('health', `probing /healthz… (${attempt}/${total})`)
+  );
   if (healthy) tasks.ok('health', 'responding');
-  else tasks.warn('health', 'not reachable yet — DNS may need a minute');
+  else tasks.warn('health', 'not responding yet — DNS or certificate still propagating');
 
   tasks.stop();
 
@@ -490,6 +538,8 @@ async function cmdSetup() {
     r2_html_bucket: r2Html.name,
     auth_mode: authMode,
     session_password_hash: sessionHash,
+    access_aud: accessAud || undefined,
+    access_team_domain: teamDomain || undefined,
     installed_at: new Date().toISOString(),
   };
   await saveConfig(cfg);
@@ -516,6 +566,29 @@ async function openUrl(url: string): Promise<void> {
   }
 }
 
+/**
+ * Poll /healthz while DNS and the edge certificate settle. A fresh Custom
+ * Domain is rarely answering the instant wrangler returns, so a single probe
+ * reports a failure that would have cleared on its own.
+ */
+async function probeHealth(
+  hostname: string,
+  onAttempt: (attempt: number, total: number) => void,
+  attempts = 10,
+  delayMs = 3000
+): Promise<boolean> {
+  for (let i = 1; i <= attempts; i++) {
+    onAttempt(i, attempts);
+    try {
+      if ((await fetch(`https://${hostname}/healthz`)).ok) return true;
+    } catch {
+      // DNS not resolving or the certificate isn't issued yet — keep waiting.
+    }
+    if (i < attempts) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
 async function sha256(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -523,40 +596,6 @@ async function sha256(input: string): Promise<string> {
 
 function readdirSorted(dir: string): Promise<string[]> {
   return import('node:fs/promises').then((fs) => fs.readdir(dir).then((f) => f.sort()));
-}
-
-async function setupAccess(token: string, accountId: string, hostname: string, adminEmail: string) {
-  // Minimal: create an Access application + policy via Zero Trust API.
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/access/apps`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: 'mailriz',
-      domain: hostname,
-      type: 'self_hosted',
-      session_duration: '24h',
-    }),
-  });
-  const j = (await res.json().catch(() => ({}))) as { success?: boolean; errors?: { message?: string }[]; result?: any };
-  if (!res.ok || j?.success === false) {
-    throw new Error(j?.errors?.[0]?.message || `HTTP ${res.status}`);
-  }
-  const appId = j.result?.id as string | undefined;
-  if (!appId) throw new Error('Access app was created but returned no id');
-  // Policy
-  const pres = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/access/apps/${appId}/policies`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: 'Only admin',
-      decision: 'allow',
-      include: [{ email: { email: adminEmail } }],
-    }),
-  });
-  const pj = (await pres.json().catch(() => ({}))) as { success?: boolean; errors?: { message?: string }[]; result?: any };
-  if (!pres.ok || pj?.success === false) {
-    throw new Error(pj?.errors?.[0]?.message || `HTTP ${pres.status}`);
-  }
 }
 
 // ---------------------------------------------------------------- status
@@ -603,6 +642,17 @@ async function cmdUpdate() {
 
   commandHeader('update', cfg.dashboard_hostname);
   hint('Replaces the Worker with the latest release. D1 and R2 data are untouched.');
+
+  // Installations created before the aud tag was persisted would be redeployed
+  // with a blank one, which locks the dashboard out entirely.
+  if (cfg.auth_mode === 'access' && !cfg.access_aud) {
+    blank();
+    checkRow(false, 'access', 'no aud tag recorded for this installation');
+    hint('  This install predates aud being saved. Redeploying would leave the');
+    hint('  Worker rejecting every request. Re-run `setup` instead of `update`.');
+    blank();
+    fail('Refusing to update — see above.');
+  }
   blank();
 
   const token = (await text({
@@ -647,6 +697,8 @@ async function cmdUpdate() {
       dashboardHostname: cfg.dashboard_hostname,
       authMode: cfg.auth_mode,
       sessionHash: cfg.session_password_hash,
+      accessAud: cfg.access_aud,
+      accessTeamDomain: cfg.access_team_domain,
     });
   } catch (e: any) {
     tasks.failTask('worker', e.message);

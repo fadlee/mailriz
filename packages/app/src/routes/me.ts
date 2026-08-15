@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
-import { MeResponse, AuthMode } from '@mailvault/shared';
+import { MeResponse, AuthMode } from '@rizmail/shared';
 
 export const meRoutes = new Hono<AppContext>();
 

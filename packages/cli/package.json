@@ -1,9 +1,9 @@
 {
-  "name": "mailvault-cli",
+  "name": "rizmail-cli",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "mailvault-cli": "./dist/cli.js"
+    "rizmail-cli": "./dist/cli.js"
   },
   "scripts": {
     "build": "bun build ./src/cli.ts --outdir dist --target node --format esm --external wrangler",
@@ -16,7 +16,7 @@
   ],
   "dependencies": {
     "@clack/prompts": "^0.8",
-    "@mailvault/shared": "workspace:*",
+    "@rizmail/shared": "workspace:*",
     "picocolors": "^1",
     "wrangler": "^4"
   },

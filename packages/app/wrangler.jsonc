@@ -1,5 +1,5 @@
 {
-  "name": "mailvault",
+  "name": "rizmail",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -23,7 +23,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "mailvault",
+      "database_name": "rizmail",
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
@@ -31,18 +31,18 @@
   "r2_buckets": [
     {
       "binding": "RAW_BUCKET",
-      "bucket_name": "mailvault-raw",
-      "preview_bucket_name": "mailvault-raw-preview"
+      "bucket_name": "rizmail-raw",
+      "preview_bucket_name": "rizmail-raw-preview"
     },
     {
       "binding": "ATTACHMENTS_BUCKET",
-      "bucket_name": "mailvault-attachments",
-      "preview_bucket_name": "mailvault-attachments-preview"
+      "bucket_name": "rizmail-attachments",
+      "preview_bucket_name": "rizmail-attachments-preview"
     },
     {
       "binding": "HTML_BUCKET",
-      "bucket_name": "mailvault-html",
-      "preview_bucket_name": "mailvault-html-preview"
+      "bucket_name": "rizmail-html",
+      "preview_bucket_name": "rizmail-html-preview"
     }
   ]
 }

@@ -7,7 +7,7 @@ import {
 import {
   Alias, EmailSummary, EmailDetail, EmailListResponse,
   EmailView, Label, MeResponse, BulkAction, CreateAliasInput,
-} from '@mailvault/shared';
+} from '@rizmail/shared';
 import { api } from './lib/api';
 import { timeAgo, formatSize, initials, avatarColor } from './lib/format';
 import {
@@ -177,7 +177,7 @@ function Sidebar(props: {
   return (
     <aside className="w-56 shrink-0 border-r border-slate-800 flex flex-col bg-slate-900/40">
       <div className="p-4 flex items-center justify-between">
-        <div className="font-bold text-lg tracking-tight text-amber-400">MailVault</div>
+        <div className="font-bold text-lg tracking-tight text-amber-400">rizmail</div>
         <button onClick={() => props.setDark(!props.dark)} className="text-slate-400 hover:text-slate-200">
           {props.dark ? <Sun size={16} /> : <Moon size={16} />}
         </button>

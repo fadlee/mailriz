@@ -1,8 +1,8 @@
-# MailVault ✉️🔒
+# rizmail ✉️🔒
 
 Self-hosted, persistent email aliases — 100% on Cloudflare.
 
-MailVault is a persistent, self-hosted email alias service running entirely on the
+rizmail is a persistent, self-hosted email alias service running entirely on the
 Cloudflare ecosystem. It gives you a Gmail-style dashboard to manage permanent
 throwaway aliases, backed by a one-shot CLI wizard for instant deployment.
 
@@ -20,12 +20,12 @@ alias per service, keep them forever, and read everything in one dashboard.
 - **Raw `.eml` + attachments** stored in R2 (you keep the originals).
 - **External image blocking** by default — no tracking pixels fire until you allow them.
 - **Full-text search** via D1 FTS5 (instant, no external search service).
-- **One-command deploy**: `bunx mailvault-cli setup`.
+- **One-command deploy**: `bunx rizmail-cli setup`.
 
 ## Quick Start
 
 ```bash
-bunx mailvault-cli setup
+bunx rizmail-cli setup
 ```
 
 The wizard walks you through:
@@ -46,7 +46,7 @@ The wizard walks you through:
 
 ```
 Internet email ──► Cloudflare Email Routing (MX/SPF auto)
-                        │  catch-all → Worker "mailvault"
+                        │  catch-all → Worker "rizmail"
                         ▼
               ┌─────────────────────┐
               │  Cloudflare Worker  │  email() handler
@@ -90,10 +90,10 @@ Internet email ──► Cloudflare Email Routing (MX/SPF auto)
 ## Commands
 
 ```bash
-bunx mailvault-cli setup    # deploy end-to-end
-bunx mailvault-cli status   # check worker + config health
-bunx mailvault-cli update   # update worker to latest release (data preserved)
-bunx mailvault-cli destroy  # tear down everything (double-confirm)
+bunx rizmail-cli setup    # deploy end-to-end
+bunx rizmail-cli status   # check worker + config health
+bunx rizmail-cli update   # update worker to latest release (data preserved)
+bunx rizmail-cli destroy  # tear down everything (double-confirm)
 ```
 
 ## Local development
@@ -121,8 +121,8 @@ email simulator: `wrangler dev --test-scheduled` and the devtools "Email" panel.
 - Tag `v*` → Release workflow:
   - bundles the Worker (`bun build --target workerd`) into `worker/index.js`
   - copies migrations
-  - tarballs to `mailvault-worker.tar.gz`
-  - publishes `mailvault-cli` to npm
+  - tarballs to `rizmail-worker.tar.gz`
+  - publishes `rizmail-cli` to npm
   - creates a GitHub Release with the tarball attached
 
 The CLI downloads the tarball from the latest GitHub Release at setup time.
@@ -133,7 +133,7 @@ The CLI downloads the tarball from the latest GitHub Release at setup time.
   `on*` handlers, `javascript:` URLs, and CSS `url()`/`expression()`.
 - External images become `data-blocked-src` — never fetched unless you click "Show images".
 - Session fallback stores a SHA-256 password hash as a Worker secret; config lives in
-  `~/.mailvault/config.json` (mode 600).
+  `~/.rizmail/config.json` (mode 600).
 - All `/api/*` routes validate Cloudflare Access JWT (or session cookie) — except
   `/healthz` (used by the wizard).
 
@@ -146,5 +146,5 @@ The CLI downloads the tarball from the latest GitHub Release at setup time.
 
 ---
 
-*MailVault — self-hosted email aliases on Cloudflare. No servers to manage, no data
+*rizmail — self-hosted email aliases on Cloudflare. No servers to manage, no data
 leaves your Cloudflare account.*

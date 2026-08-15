@@ -1,5 +1,5 @@
 /**
- * @mailvault/shared — types + constants shared between the Worker,
+ * @rizmail/shared — types + constants shared between the Worker,
  * the dashboard, and the CLI.
  */
 

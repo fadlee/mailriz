@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
-import { Alias, CreateAliasInput, UpdateAliasInput, ALIAS_LOCAL_PART_RE, VAULT_DOMAIN_RE } from '@mailvault/shared';
+import { Alias, CreateAliasInput, UpdateAliasInput, ALIAS_LOCAL_PART_RE, VAULT_DOMAIN_RE } from '@rizmail/shared';
 import { ulid } from 'ulid';
 
 export const aliasRoutes = new Hono<AppContext>();

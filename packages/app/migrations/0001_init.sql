@@ -1,4 +1,4 @@
--- MailVault initial schema
+-- rizmail initial schema
 -- D1 (SQLite) — FTS5 full-text search backed by triggers.
 
 CREATE TABLE IF NOT EXISTS users (

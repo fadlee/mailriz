@@ -9,7 +9,7 @@
  *   destroy  Tear down everything (with double confirmation)
  */
 
-import { intro, outro, text, select, confirm, spinner, isCancel, cancel, note } from '@clack/prompts';
+import { text, select, confirm, isCancel } from '@clack/prompts';
 import pc from 'picocolors';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -18,7 +18,10 @@ import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
-import { showBanner, stepHeader, statusRow } from './banner';
+import {
+  banner, commandHeader, checkRow, heading, hint, bullet, link, rows,
+  blank, spin, TaskList, finished, aborted, accent,
+} from './ui';
 import {
   verifyToken, listAccounts, listZones,
   listD1, createD1, d1Query,
@@ -50,7 +53,7 @@ interface Config {
 }
 
 function fail(msg: string): never {
-  cancel(msg);
+  aborted(msg);
   process.exit(1);
 }
 
@@ -154,9 +157,11 @@ const SCOPE_ROWS = [
 ];
 
 async function cmdSetup() {
-  showBanner();
+  banner();
 
-  // Pre-flight checks (mirrors cloakmail's opening status rows).
+  // ---- pre-flight, before anything is asked of the user
+  commandHeader('preflight');
+
   let wranglerOk = false;
   try {
     const require = createRequire(import.meta.url);
@@ -164,21 +169,18 @@ async function cmdSetup() {
     const bin = join(dirname(pkg), 'bin', 'wrangler.js');
     wranglerOk = existsSync(bin);
   } catch { wranglerOk = false; }
-  statusRow(wranglerOk, wranglerOk ? 'wrangler found' : 'wrangler NOT found (bundled with this CLI)');
+  checkRow(wranglerOk, 'wrangler', wranglerOk ? 'bundled' : 'not found');
 
   let cfReachable = false;
   try {
     const r = await fetch('https://api.cloudflare.com/client/v4/');
     cfReachable = r.ok || r.status === 401 || r.status === 403;
   } catch { cfReachable = false; }
-  statusRow(cfReachable, cfReachable ? 'Cloudflare API is reachable' : 'Cloudflare API unreachable (check your network)');
+  checkRow(cfReachable, 'cloudflare', cfReachable ? 'api reachable' : 'unreachable — check your network');
 
   const stateExists = existsSync(CONFIG_PATH);
-  statusRow(true, stateExists
-    ? `State file at ${CONFIG_PATH}`
-    : `State file will be created at ${CONFIG_PATH}`);
+  checkRow(true, 'state', stateExists ? CONFIG_PATH : `will be created at ${CONFIG_PATH}`);
 
-  // 1. Bun version check (minimum).
   try {
     const { stdout } = await execFileP('bun', ['--version']);
     const v = stdout.trim();
@@ -186,42 +188,35 @@ async function cmdSetup() {
     const major = majorRaw ?? 0;
     const minor = minorRaw ?? 0;
     if (major < 1 || (major === 1 && minor < 1)) {
-      fail(`Bun >= 1.1 required, found ${v}. Install: curl -fsSL https://bun.sh/install | bash`);
+      checkRow(false, 'bun', `${v} — need >= 1.1`);
+      fail('Bun >= 1.1 required. Install: curl -fsSL https://bun.sh/install | bash');
     }
+    checkRow(true, 'bun', v);
   } catch {
+    checkRow(false, 'bun', 'not installed');
     fail('Bun is required. Install: curl -fsSL https://bun.sh/install | bash');
   }
 
-  // 2. Token.
-  stepHeader('Step 1: Cloudflare API token');
-  console.log(pc.dim('MailRiz needs a Cloudflare API token with these 7 scopes:'));
-  for (const row of SCOPE_ROWS) {
-    console.log(pc.dim(`  ${row}`));
-  }
+  // ---- token
+  heading('Cloudflare API token');
+  hint('MailRiz needs a token carrying these 7 scopes:');
+  for (const row of SCOPE_ROWS) bullet(row);
+  blank();
+  hint('Token page (name is pre-filled):');
   const tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens?name=mailriz-cli';
-  console.log('');
-  console.log(pc.dim('Token page (token name pre-filled):'));
-  console.log(pc.dim(`  ${tokenUrl}`));
+  link(tokenUrl);
+  blank();
 
   const openBrowser = (await confirm({
-    message: 'Open the Cloudflare token page in your browser now?',
+    message: 'Open that page in your browser now?',
     initialValue: true,
   })) as boolean;
   if (isCancel(openBrowser)) process.exit(0);
-  if (openBrowser) {
-    try {
-      const { execFile } = await import('node:child_process');
-      const { promisify: p } = await import('node:util');
-      await p(execFile)('xdg-open', [tokenUrl]).catch(() => {});
-      console.log(pc.dim('  (opened — create the token, then paste it below)'));
-    } catch {
-      console.log(pc.dim(`  (could not auto-open — visit ${tokenUrl})`));
-    }
-  }
+  if (openBrowser) await openUrl(tokenUrl);
 
   const token = (await text({
-    message: 'Cloudflare API Token (paste)',
-    placeholder: 'Leave blank to use CLOUDFLARE_API_TOKEN env',
+    message: 'Paste the token',
+    placeholder: 'blank = use $CLOUDFLARE_API_TOKEN',
     validate: (v) => {
       if (v && v.length > 20) return undefined;
       return process.env.CLOUDFLARE_API_TOKEN ? undefined : 'Token looks too short';
@@ -230,55 +225,57 @@ async function cmdSetup() {
   if (isCancel(token)) process.exit(0);
   const effectiveToken = token || process.env.CLOUDFLARE_API_TOKEN || '';
 
-  const sp = spinner();
-  sp.start('Verifying token…');
+  blank();
   let verified;
   try {
-    verified = await verifyToken(effectiveToken);
+    verified = await spin('token', () => verifyToken(effectiveToken), (v) => `valid · ${v.id}`);
   } catch (e: any) {
-    sp.stop('✗');
     fail(`Token verification failed: ${e.message}`);
   }
-  sp.stop(`✓ Token OK (${verified.id})`);
 
-  // 3. Account + zone selection.
-  stepHeader('Step 2: Account & domain');
-  const accounts = await listAccounts(effectiveToken);
+  // ---- account + zone
+  const accounts = await spin(
+    'accounts',
+    () => listAccounts(effectiveToken),
+    (a) => `${a.length} available`
+  );
   if (accounts.length === 0) fail('No accounts on this token');
+
   let accountId: string;
   let accountObj = accounts[0]!;
-  if (accounts.length === 1) {
-    accountId = accountObj.id;
-  } else {
+  if (accounts.length > 1) {
+    blank();
     const chosen = (await select({
-      message: 'Select account',
+      message: 'Which account?',
       options: accounts.map((a) => ({ value: a.id, label: a.name })),
     })) as string;
     if (isCancel(chosen)) process.exit(0);
-    accountId = chosen;
     accountObj = accounts.find((a) => a.id === chosen)!;
+    blank();
   }
-  const sp2 = spinner();
-  sp2.start('Listing zones…');
-  const zones = await listZones(effectiveToken, accountId);
-  sp2.stop('✓');
+  accountId = accountObj.id;
+
+  const zones = await spin(
+    'zones',
+    () => listZones(effectiveToken, accountId),
+    (z) => `${z.length} available`
+  );
   if (zones.length === 0) fail('No zones on this account — add a domain first');
-  let zoneId: string;
+
   let zoneObj = zones[0]!;
-  if (zones.length === 1) {
-    zoneId = zoneObj.id;
-  } else {
+  if (zones.length > 1) {
+    blank();
     const chosen = (await select({
-      message: 'Select zone (domain)',
+      message: 'Which domain?',
       options: zones.map((z) => ({ value: z.id, label: `${z.name} (${z.status})` })),
     })) as string;
     if (isCancel(chosen)) process.exit(0);
-    zoneId = chosen;
     zoneObj = zones.find((z) => z.id === chosen)!;
   }
+  const zoneId = zoneObj.id;
 
-  // 4. Config.
-  stepHeader('Step 3: Configuration');
+  // ---- configuration
+  heading('Configuration');
   const dashboardHostname = (await text({
     message: 'Dashboard hostname',
     placeholder: `inbox.${zoneObj.name}`,
@@ -308,53 +305,101 @@ async function cmdSetup() {
     authMode = 'session';
   }
 
-  // 5. Fetch release artifact.
-  stepHeader('Step 4: Provisioning');
-  sp.start('Fetching release artifact…');
+  // ---- provisioning: one live task block owns the screen from here on.
+  // Nothing interactive may print until tasks.stop(); warnings are queued and
+  // shown underneath so long text can't tear the redrawn rows.
+  const workerName = 'mailriz';
+
+  blank();
+  commandHeader('setup', `${accountObj.name} / ${zoneObj.name}`);
+
+  const tasks = new TaskList([
+    { key: 'token', label: 'token' },
+    { key: 'account', label: 'account' },
+    { key: 'zone', label: 'zone' },
+    { key: 'release', label: 'release' },
+    { key: 'd1', label: 'd1' },
+    { key: 'migrations', label: 'migrations' },
+    { key: 'r2', label: 'r2' },
+    { key: 'worker', label: 'worker' },
+    { key: 'domain', label: 'domain' },
+    { key: 'routing', label: 'email routing' },
+    { key: 'access', label: 'access' },
+    { key: 'health', label: 'health' },
+  ]);
+
+  tasks.seed('token', `valid · ${verified.id}`);
+  tasks.seed('account', accountObj.name);
+  tasks.seed('zone', zoneObj.name);
+  if (!useAccess) tasks.seed('access', 'session password', 'skip');
+  tasks.start();
+
+  // Annotated on the variable, not just the arrow, so TypeScript treats calls
+  // to it as terminating control flow.
+  const abort: (msg: string) => never = (msg) => {
+    tasks.stop();
+    fail(msg);
+  };
+
+  // Release artifact.
+  tasks.run('release', 'downloading worker bundle…');
   let release: { dir: string; index: string; migrationsDir: string; assetsDir: string };
   try {
     release = await fetchReleaseAsset();
   } catch (e: any) {
-    sp.stop('✗');
-    fail(`Release fetch failed: ${e.message}`);
+    tasks.failTask('release', e.message);
+    abort(`Release fetch failed: ${e.message}`);
   }
-  sp.stop('✓');
+  tasks.ok('release', 'worker bundle ready');
 
   const migrations = existsSync(release.migrationsDir)
     ? (await readdirSorted(release.migrationsDir))
     : [];
 
-  // 6. D1 provision.
-  sp.start('Provisioning D1 database…');
-  const d1s = await listD1(effectiveToken, accountId);
-  let d1 = d1s.find((d) => d.name === 'mailriz');
-  if (!d1) d1 = await createD1(effectiveToken, accountId, 'mailriz');
-  sp.stop(`✓ D1 ${d1.id}`);
+  // D1.
+  tasks.run('d1', 'provisioning database…');
+  let d1;
+  try {
+    const d1s = await listD1(effectiveToken, accountId);
+    d1 = d1s.find((d) => d.name === 'mailriz');
+    if (!d1) d1 = await createD1(effectiveToken, accountId, 'mailriz');
+  } catch (e: any) {
+    tasks.failTask('d1', e.message);
+    abort(`D1 provisioning failed: ${e.message}`);
+  }
+  tasks.ok('d1', `mailriz (${d1.id.slice(0, 8)})`);
 
-  // Apply migrations.
-  sp.start('Applying migrations…');
+  // Migrations.
+  tasks.run('migrations', `applying ${migrations.length}…`);
   try {
     for (const m of migrations) {
       const sql = await readFile(join(release.migrationsDir, m), 'utf8');
       await d1Query(effectiveToken, accountId, d1.id, sql);
     }
   } catch (e: any) {
-    sp.stop('✗');
-    fail(`Migration failed: ${e.message}`);
+    tasks.failTask('migrations', e.message);
+    abort(`Migration failed: ${e.message}`);
   }
-  sp.stop('✓ Migrations applied');
+  tasks.ok('migrations', `${migrations.length} applied`);
 
-  // 7. R2 provision.
-  sp.start('Provisioning R2 buckets…');
-  const r2s = await listR2Buckets(effectiveToken, accountId);
-  const r2Raw = r2s.find((b) => b.name === 'mailriz-raw') || await createR2Bucket(effectiveToken, accountId, 'mailriz-raw');
-  const r2Att = r2s.find((b) => b.name === 'mailriz-attachments') || await createR2Bucket(effectiveToken, accountId, 'mailriz-attachments');
-  const r2Html = r2s.find((b) => b.name === 'mailriz-html') || await createR2Bucket(effectiveToken, accountId, 'mailriz-html');
-  sp.stop('✓ R2 ready');
+  // R2.
+  tasks.run('r2', 'creating 3 buckets…');
+  let r2Raw, r2Att, r2Html;
+  try {
+    const r2s = await listR2Buckets(effectiveToken, accountId);
+    const ensure = async (name: string) =>
+      r2s.find((b) => b.name === name) || await createR2Bucket(effectiveToken, accountId, name);
+    r2Raw = await ensure('mailriz-raw');
+    r2Att = await ensure('mailriz-attachments');
+    r2Html = await ensure('mailriz-html');
+  } catch (e: any) {
+    tasks.failTask('r2', e.message);
+    abort(`R2 provisioning failed: ${e.message}`);
+  }
+  tasks.ok('r2', 'raw · attachments · html');
 
-  // 8. Deploy worker (wrangler child process with generated wrangler.jsonc).
-  sp.start('Deploying Worker…');
-  const workerName = 'mailriz';
+  // Worker.
+  tasks.run('worker', 'deploying…');
   try {
     await deployWithWrangler({
       token: effectiveToken,
@@ -371,67 +416,68 @@ async function cmdSetup() {
       sessionHash,
     });
   } catch (e: any) {
-    sp.stop('✗');
-    fail(`Worker deploy failed: ${e.message}`);
+    tasks.failTask('worker', e.message);
+    abort(`Worker deploy failed: ${e.message}`);
   }
-  sp.stop('✓ Worker deployed');
+  tasks.ok('worker', workerName);
 
-  // 9. Custom domain route.
-  sp.start('Binding custom domain…');
+  // Custom domain. Non-fatal: the worker is live, it just isn't bound yet.
+  tasks.run('domain', 'binding…');
   try {
     await createWorkerRoute(effectiveToken, zoneId, `${dashboardHostname}/*`, workerName);
     await createWorkerRoute(effectiveToken, zoneId, dashboardHostname, workerName);
+    tasks.ok('domain', dashboardHostname);
   } catch (e: any) {
-    sp.stop('✗');
-    note(`Custom domain binding failed (${e.message}). You can add a Worker route manually in the dashboard.`, 'Warning');
+    tasks.warn('domain', 'needs a manual route', {
+      title: 'Custom domain not bound',
+      body: `${e.message}\n\nAdd it by hand: Workers & Pages → ${workerName} → Settings →\nDomains & Routes → Add → ${dashboardHostname}`,
+    });
   }
-  sp.stop('✓ Domain bound');
 
-  // 10. Email Routing.
-  sp.start('Enabling Email Routing…');
+  // Email Routing. Non-fatal, but mail won't arrive until it's on.
+  tasks.run('routing', 'enabling catch-all…');
   try {
     const settings = await getEmailRoutingSettings(effectiveToken, zoneId);
-    if (!settings.enabled) {
-      await enableEmailRouting(effectiveToken, zoneId);
-    }
-    // catch-all → worker
+    if (!settings.enabled) await enableEmailRouting(effectiveToken, zoneId);
     await createEmailRoutingRule(effectiveToken, zoneId, { type: 'all' }, { type: 'worker', value: [workerName] });
+    tasks.ok('routing', `*@${zoneObj.name} → ${workerName}`);
   } catch (e: any) {
-    sp.stop('✗');
-    note(`Email Routing setup failed (${e.message}). Enable it manually in the dashboard: Email → Email Routing → Enable, then add a catch-all rule to Worker "mailriz".`, 'Manual step needed');
+    tasks.warn('routing', 'needs manual setup', {
+      title: 'Email Routing not configured — mail will not arrive yet',
+      body: `${e.message}\n\nEnable it by hand: Email → Email Routing → Enable,\nthen add a catch-all rule pointing at Worker "${workerName}".`,
+    });
   }
-  sp.stop('✓ Email Routing ready');
 
-  // 11. Access (optional).
+  // Access, only when the user chose it.
   if (useAccess) {
-    sp.start('Configuring Cloudflare Access…');
+    tasks.run('access', 'creating application…');
     try {
-      // Attempt Zero Trust app creation; if the token lacks scope, fall back to manual.
       await setupAccess(effectiveToken, accountId, dashboardHostname, adminEmail);
-      sp.stop('✓ Access configured');
+      tasks.ok('access', `single-user · ${adminEmail}`);
     } catch (e: any) {
-      sp.stop('⚠');
-      note(
-        `Cloudflare Access could not be configured automatically (${e.message}). ` +
-        `Your token may need Zero Trust permissions.\n\n` +
-        `Manual steps:\n` +
-        `1. Zero Trust → Access → Applications → Add an application\n` +
-        `2. Type: Self-hosted. Domain: ${dashboardHostname}\n` +
-        `3. Policy: Allow only ${adminEmail}\n` +
-        `4. Save. Then set Worker vars ACCESS_TEAM_DOMAIN and ACCESS_AUD.`,
-        'Manual Access setup'
-      );
+      tasks.warn('access', 'needs manual setup', {
+        title: 'Cloudflare Access not configured',
+        body:
+          `${e.message}\nYour token may be missing Zero Trust permissions.\n\n` +
+          `1. Zero Trust → Access → Applications → Add an application\n` +
+          `2. Type: Self-hosted. Domain: ${dashboardHostname}\n` +
+          `3. Policy: allow only ${adminEmail}\n` +
+          `4. Save, then set Worker vars ACCESS_TEAM_DOMAIN and ACCESS_AUD.`,
+      });
     }
   }
 
-  // 12. Verify.
-  sp.start('Verifying deployment…');
+  // Health.
+  tasks.run('health', 'probing /healthz…');
   let healthy = false;
   try {
     const res = await fetch(`https://${dashboardHostname}/healthz`);
     healthy = res.ok;
   } catch {}
-  sp.stop(healthy ? '✓ Healthy' : '⚠ /healthz not reachable yet (DNS may need a minute)');
+  if (healthy) tasks.ok('health', 'responding');
+  else tasks.warn('health', 'not reachable yet — DNS may need a minute');
+
+  tasks.stop();
 
   const cfg: Config = {
     account_id: accountId,
@@ -450,11 +496,26 @@ async function cmdSetup() {
   };
   await saveConfig(cfg);
 
-  outro(
-    pc.green(`Done! Dashboard: https://${dashboardHostname}\n`) +
-    pc.cyan(`Test: send an email to anything@${zoneObj.name}\n`) +
-    pc.dim(`State saved to ~/.mailriz/config.json (chmod 600)`)
-  );
+  finished('MailRiz is live', [
+    ['dashboard', accent(`https://${dashboardHostname}`)],
+    ['inbox', `anything@${zoneObj.name}`],
+    ['auth', authMode === 'access' ? `Cloudflare Access · ${adminEmail}` : `password · ${adminEmail}`],
+    ['state', `${CONFIG_PATH} (chmod 600)`],
+  ], 'Send yourself a mail at any address on the domain — it lands in the dashboard.');
+}
+
+/** Open a URL with the platform's opener; silent when there's no GUI. */
+async function openUrl(url: string): Promise<void> {
+  const opener =
+    process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'explorer'
+    : 'xdg-open';
+  try {
+    await execFileP(opener, [url]);
+    hint('  opened — create the token, then paste it below');
+  } catch {
+    hint(`  could not open a browser — visit the link above`);
+  }
 }
 
 async function sha256(input: string): Promise<string> {
@@ -502,55 +563,77 @@ async function setupAccess(token: string, accountId: string, hostname: string, a
 // ---------------------------------------------------------------- status
 
 async function cmdStatus() {
-  showBanner();
-  stepHeader('MailRiz status');
+  banner();
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
-  note(`Dashboard: ${cfg.dashboard_hostname}\nAdmin: ${cfg.admin_email}\nAuth: ${cfg.auth_mode}`, 'Installation');
+  commandHeader('status', cfg.dashboard_hostname);
+  rows([
+    ['dashboard', `https://${cfg.dashboard_hostname}`],
+    ['inbox', `anything@${cfg.zone_name}`],
+    ['admin', cfg.admin_email],
+    ['auth', cfg.auth_mode === 'access' ? 'Cloudflare Access' : 'session password'],
+    ['worker', cfg.worker_name],
+    ['d1', cfg.d1_database_id.slice(0, 8)],
+    ['installed', new Date(cfg.installed_at).toLocaleString()],
+  ]);
+  blank();
 
-  const sp = spinner();
-  sp.start('Checking /healthz…');
   try {
-    const res = await fetch(`https://${cfg.dashboard_hostname}/healthz`);
-    if (res.ok) {
-      const j = await res.json();
-      sp.stop('✓ Worker healthy');
-    } else {
-      sp.stop(`⚠ /healthz HTTP ${res.status}`);
-    }
-  } catch (e: any) {
-    sp.stop(`✗ ${e.message}`);
+    await spin(
+      'health',
+      async () => {
+        const res = await fetch(`https://${cfg.dashboard_hostname}/healthz`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res;
+      },
+      () => 'responding'
+    );
+  } catch {
+    // spin already printed the failing row.
   }
+  blank();
 }
 
 // ---------------------------------------------------------------- update
 
 async function cmdUpdate() {
-  showBanner();
-  stepHeader('MailRiz update');
+  banner();
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
-  const sp = spinner();
-  sp.start('Fetching latest release…');
-  let release: { dir: string; index: string; migrationsDir: string; assetsDir: string };
-  try {
-    release = await fetchReleaseAsset();
-  } catch (e: any) {
-    sp.stop('✗');
-    fail(`Release fetch failed: ${e.message}`);
-  }
-  sp.stop('✓');
+  commandHeader('update', cfg.dashboard_hostname);
+  hint('Replaces the Worker with the latest release. D1 and R2 data are untouched.');
+  blank();
 
   const token = (await text({
     message: 'Cloudflare API Token',
-    placeholder: 'same as during setup',
+    placeholder: 'same one you used for setup',
     validate: (v) => (v?.length > 20 ? undefined : 'Too short'),
   })) as string;
   if (isCancel(token)) process.exit(0);
 
-  sp.start('Re-deploying Worker (data untouched)…');
+  blank();
+  const tasks = new TaskList([
+    { key: 'release', label: 'release' },
+    { key: 'worker', label: 'worker' },
+    { key: 'health', label: 'health' },
+  ]);
+  tasks.start();
+
+  const abort: (msg: string) => never = (msg) => { tasks.stop(); fail(msg); };
+
+  tasks.run('release', 'downloading latest…');
+  let release: { dir: string; index: string; migrationsDir: string; assetsDir: string };
+  try {
+    release = await fetchReleaseAsset();
+  } catch (e: any) {
+    tasks.failTask('release', e.message);
+    abort(`Release fetch failed: ${e.message}`);
+  }
+  tasks.ok('release', 'worker bundle ready');
+
+  tasks.run('worker', 'redeploying…');
   try {
     await deployWithWrangler({
       token,
@@ -567,32 +650,57 @@ async function cmdUpdate() {
       sessionHash: cfg.session_password_hash,
     });
   } catch (e: any) {
-    sp.stop('✗');
-    fail(`Update failed: ${e.message}`);
+    tasks.failTask('worker', e.message);
+    abort(`Update failed: ${e.message}`);
   }
-  sp.stop('✓ Updated');
+  tasks.ok('worker', cfg.worker_name);
 
-  outro(pc.green('Worker updated. Data preserved.'));
+  tasks.run('health', 'probing /healthz…');
+  let healthy = false;
+  try {
+    healthy = (await fetch(`https://${cfg.dashboard_hostname}/healthz`)).ok;
+  } catch {}
+  if (healthy) tasks.ok('health', 'responding');
+  else tasks.warn('health', 'not reachable yet');
+
+  tasks.stop();
+
+  finished('Updated', [
+    ['dashboard', accent(`https://${cfg.dashboard_hostname}`)],
+    ['data', 'preserved — D1 and R2 untouched'],
+  ]);
 }
 
 // ---------------------------------------------------------------- destroy
 
 async function cmdDestroy() {
-  showBanner();
-  stepHeader('MailRiz destroy');
+  banner();
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed.');
 
-  const sure = await confirm({
-    message: 'This deletes the Worker, D1 data, and R2 objects. Continue?',
-    initialValue: false,
-  });
-  if (!sure) { cancel('Aborted'); process.exit(0); }
-  const sure2 = await confirm({
-    message: 'Really sure? Type "yes" to confirm.',
-    initialValue: false,
-  });
-  if (!sure2) { cancel('Aborted'); process.exit(0); }
+  commandHeader('destroy', cfg.dashboard_hostname);
+  console.log(`  ${pc.red(pc.bold('This is irreversible.'))} ${pc.dim('It permanently deletes:')}`);
+  blank();
+  rows([
+    ['worker', cfg.worker_name],
+    ['d1', `${cfg.d1_database_id.slice(0, 8)} — every stored email`],
+    ['r2', `${cfg.r2_raw_bucket}, ${cfg.r2_attachments_bucket}, ${cfg.r2_html_bucket}`],
+    ['state', CONFIG_PATH],
+  ]);
+  blank();
+  hint(`Email Routing rules and the Access application are left in place.`);
+  blank();
+
+  // Typing the hostname beats a second yes/no — it can't be muscle-memoried.
+  const typed = (await text({
+    message: `Type the dashboard hostname to confirm`,
+    placeholder: cfg.dashboard_hostname,
+  })) as string;
+  if (isCancel(typed)) process.exit(0);
+  if (typed.trim() !== cfg.dashboard_hostname) {
+    aborted('Hostname did not match — nothing was deleted.');
+    process.exit(0);
+  }
 
   const token = (await text({
     message: 'Cloudflare API Token',
@@ -600,35 +708,64 @@ async function cmdDestroy() {
   })) as string;
   if (isCancel(token)) process.exit(0);
 
-  const sp = spinner();
-  sp.start('Deleting Worker…');
-  await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfg.account_id}/workers/scripts/${cfg.worker_name}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  }).catch(() => {});
-  sp.stop('✓ Worker deleted');
+  blank();
+  const del = (url: string) =>
+    fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+  const api = `https://api.cloudflare.com/client/v4/accounts/${cfg.account_id}`;
 
-  sp.start('Deleting D1 database…');
-  await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfg.account_id}/d1/database/${cfg.d1_database_id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  }).catch(() => {});
-  sp.stop('✓ D1 deleted');
+  const tasks = new TaskList([
+    { key: 'worker', label: 'worker' },
+    { key: 'd1', label: 'd1' },
+    { key: 'r2', label: 'r2' },
+    { key: 'state', label: 'state' },
+  ]);
+  tasks.start();
 
-  sp.start('Deleting R2 buckets…');
+  tasks.run('worker', 'deleting…');
+  await del(`${api}/workers/scripts/${cfg.worker_name}`);
+  tasks.ok('worker', 'deleted');
+
+  tasks.run('d1', 'deleting database…');
+  await del(`${api}/d1/database/${cfg.d1_database_id}`);
+  tasks.ok('d1', 'deleted');
+
+  tasks.run('r2', 'deleting 3 buckets…');
   for (const b of [cfg.r2_raw_bucket, cfg.r2_attachments_bucket, cfg.r2_html_bucket]) {
-    await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfg.account_id}/r2/buckets/${b}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    }).catch(() => {});
+    await del(`${api}/r2/buckets/${b}`);
   }
-  sp.stop('✓ R2 deleted');
+  tasks.ok('r2', 'deleted');
 
+  tasks.run('state', 'removing config…');
   await rm(CONFIG_PATH, { force: true }).catch(() => {});
-  outro(pc.green('Destroyed.'));
+  tasks.ok('state', 'removed');
+
+  tasks.stop();
+
+  finished('Destroyed', [
+    ['left behind', 'Email Routing rules · Access application'],
+  ], 'Remove those in the Cloudflare dashboard if you no longer need them.');
 }
 
 // ---------------------------------------------------------------- main
+
+const COMMANDS: [string, string][] = [
+  ['setup', 'Deploy end-to-end — Worker, D1, R2, DNS, Email Routing, Access'],
+  ['status', 'Show the installation and probe the Worker'],
+  ['update', 'Move the Worker to the latest release, keeping all data'],
+  ['destroy', 'Delete the Worker, database, and stored mail'],
+];
+
+function cmdHelp(unknown?: string): void {
+  banner();
+  if (unknown) {
+    aborted(`Unknown command: ${unknown}`);
+  }
+  commandHeader('commands');
+  rows(COMMANDS.map(([name, desc]) => [name, pc.dim(desc)]));
+  blank();
+  hint('Run without a command to start setup. Config lives in ~/.mailriz/config.json.');
+  blank();
+}
 
 const cmd = process.argv[2] || 'setup';
 
@@ -636,7 +773,8 @@ if (cmd === 'setup') cmdSetup();
 else if (cmd === 'status') cmdStatus();
 else if (cmd === 'update') cmdUpdate();
 else if (cmd === 'destroy') cmdDestroy();
+else if (['help', '--help', '-h'].includes(cmd)) cmdHelp();
 else {
-  console.log(pc.yellow('Unknown command. Use: setup | status | update | destroy'));
+  cmdHelp(cmd);
   process.exit(1);
 }

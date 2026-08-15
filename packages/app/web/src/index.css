@@ -124,10 +124,12 @@ body {
 
 /* Email body iframe — stays white regardless of theme, because the HTML
    inside is the sender's and must not inherit our palette. */
+/* The message renders as it was sent, so the frame is just a white page for
+   it to sit on — the sender's own CSS supplies everything inside. */
 .email-frame {
   border: 0;
   width: 100%;
-  min-height: 60vh;
+  min-height: 70vh;
   background: white;
   color: #0f172a;
   border-radius: var(--radius-control);

@@ -111,12 +111,19 @@ describe('emailHandler', () => {
     expect(row.p9.length).toBeGreaterThan(0);
     // raw key stored
     expect(rawBucket.objects.has(row.p10)).toBe(true);
-    // html sanitized stored (fixture has <script> stripped)
+    // Body stored as sent, minus anything executable: the layout is the point,
+    // and remote images are withheld by the CSP when it is served rather than
+    // by rewriting the source.
     const htmlKey = row.p11;
     expect(htmlBucket.objects.has(htmlKey)).toBe(true);
-    const html = htmlBucket.objects.get(htmlKey);
-    expect(String(html)).not.toContain('<script>');
-    expect(String(html)).toContain('data-blocked-src');
+    const html = String(htmlBucket.objects.get(htmlKey));
+    expect(html).not.toContain('<script');
+    expect(html).toContain('<img src="https://example.com/tracking.png"');
+    expect(html).toContain('<b>test</b>');
+    expect(html).not.toContain('data-blocked-src');
+
+    // …but counted, so the reading pane can offer to show them.
+    expect(row.p15).toBe(1); // blocked_images
   });
 
   it('rejects unknown addresses via setReject', async () => {

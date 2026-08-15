@@ -829,34 +829,45 @@ function ReadingPane({ emailId, onBack }: { emailId: string; onBack: () => void 
 
       {/* body */}
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        {data.body_text && (
-          <pre className="mb-4 font-sans text-[14.5px] leading-relaxed whitespace-pre-wrap text-text">
+        {/* The HTML part and the text part are two renderings of the same
+            message; showing both prints it twice. Prefer the HTML. */}
+        {data.body_text && !data.html_r2_key && (
+          <pre className="font-sans text-[14.5px] leading-relaxed whitespace-pre-wrap text-text">
             {data.body_text}
           </pre>
         )}
 
-        {showImages ? (
-          <iframe
-            key={iframeKey}
-            src={`/api/emails/${emailId}/html`}
-            className="email-frame"
-            sandbox="allow-same-origin"
-            title="Email HTML"
-          />
-        ) : data.html_r2_key ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-control border border-border bg-surface-2 p-4 text-[13.5px] text-text-dim">
-            <AlertTriangle size={16} className="shrink-0 text-warn" />
-            <span className="min-w-0 flex-1">
-              This email contains external images. They're blocked for your privacy.
-            </span>
-            <button
-              onClick={() => { setShowImages(true); setIframeKey((k) => k + 1); }}
-              className="rounded-[10px] bg-accent px-3 py-1.5 text-[12.5px] font-semibold text-accent-ink transition hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              Show images
-            </button>
-          </div>
-        ) : null}
+        {data.html_r2_key && (
+          <>
+            {/* Only remote images are withheld, and only by the response's
+                CSP — the body itself is served exactly as it was sent. */}
+            {!showImages && (data.blocked_images ?? 0) > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-3 rounded-control border border-border bg-surface-2 p-4 text-[13.5px] text-text-dim">
+                <AlertTriangle size={16} className="shrink-0 text-warn" />
+                <span className="min-w-0 flex-1">
+                  {data.blocked_images === 1
+                    ? '1 external image is blocked for your privacy.'
+                    : `${data.blocked_images} external images are blocked for your privacy.`}
+                </span>
+                <button
+                  onClick={() => { setShowImages(true); setIframeKey((k) => k + 1); }}
+                  className="rounded-[10px] bg-accent px-3 py-1.5 text-[12.5px] font-semibold text-accent-ink transition hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  Show images
+                </button>
+              </div>
+            )}
+            {/* An empty sandbox is the point: no allow-same-origin, so the
+                message can never reach the dashboard's origin. */}
+            <iframe
+              key={iframeKey}
+              src={`/api/emails/${emailId}/html${showImages ? '?images=1' : ''}`}
+              className="email-frame"
+              sandbox=""
+              title="Email body"
+            />
+          </>
+        )}
 
         {!data.body_text && !data.html_r2_key && (
           <div className="text-[14px] text-text-faint">No content.</div>

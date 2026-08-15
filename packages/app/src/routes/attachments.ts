@@ -17,11 +17,14 @@ attachmentRoutes.get('/:id', async (c) => {
   // Safe Content-Disposition.
   const safeName = (row.filename || 'attachment').replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'attachment';
   const encoded = encodeURIComponent(safeName);
+  // Always a download. Images embedded in a body are inlined as data: URIs
+  // when that body is served, so nothing here needs to render in place.
   return new Response(obj.body, {
     headers: {
       'Content-Type': row.content_type || 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${safeName}"; filename*=UTF-8''${encoded}`,
       'Content-Length': String(row.size_bytes),
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 });

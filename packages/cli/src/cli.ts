@@ -29,6 +29,7 @@ import {
   enableEmailRouting, setCatchAllToWorker, getEmailRoutingSettings,
   getAccessOrganization, createAccessApp, createAccessPolicy,
 } from './cf';
+import { applyMigrations } from './migrate';
 
 const execFileP = promisify(execFile);
 const CONFIG_DIR = join(homedir(), '.mailriz');
@@ -421,17 +422,24 @@ async function cmdSetup() {
   tasks.ok('d1', `mailriz (${d1.uuid.slice(0, 8)})`);
 
   // Migrations.
-  tasks.run('migrations', `applying ${migrations.length}…`);
+  tasks.run('migrations', `checking ${migrations.length}…`);
+  let appliedNow: string[] = [];
   try {
-    for (const m of migrations) {
-      const sql = await readFile(join(release.migrationsDir, m), 'utf8');
-      await d1Query(effectiveToken, accountId, d1.uuid, sql);
-    }
+    appliedNow = await applyMigrations(
+      (sql) => d1Query(effectiveToken, accountId, d1.uuid, sql),
+      release.migrationsDir,
+      migrations
+    );
   } catch (e: any) {
     tasks.failTask('migrations', e.message);
     abort(`Migration failed: ${e.message}`);
   }
-  tasks.ok('migrations', `${migrations.length} applied`);
+  tasks.ok(
+    'migrations',
+    appliedNow.length > 0
+      ? `${appliedNow.length} applied · ${migrations.length} total`
+      : `up to date · ${migrations.length} total`
+  );
 
   // Repair aliases left on the dashboard hostname by earlier builds.
   try {
@@ -708,6 +716,9 @@ async function cmdUpdate() {
   blank();
   const tasks = new TaskList([
     { key: 'release', label: 'release' },
+    // A release can carry schema changes; update never applied them, so new
+    // columns were missing and the Worker failed on first query.
+    { key: 'migrations', label: 'migrations' },
     { key: 'worker', label: 'worker' },
     { key: 'aliases', label: 'aliases' },
     { key: 'health', label: 'health' },
@@ -725,6 +736,21 @@ async function cmdUpdate() {
     abort(`Release fetch failed: ${e.message}`);
   }
   tasks.ok('release', 'worker bundle ready');
+
+  // Schema before code: the new bundle may query columns this release adds.
+  tasks.run('migrations', 'checking…');
+  try {
+    const files = existsSync(release.migrationsDir) ? await readdirSorted(release.migrationsDir) : [];
+    const applied = await applyMigrations(
+      (sql) => d1Query(token, cfg.account_id, cfg.d1_database_id, sql),
+      release.migrationsDir,
+      files
+    );
+    tasks.ok('migrations', applied.length > 0 ? `${applied.length} applied` : 'up to date');
+  } catch (e: any) {
+    tasks.failTask('migrations', e.message);
+    abort(`Migration failed: ${e.message}`);
+  }
 
   tasks.run('worker', 'redeploying…');
   try {

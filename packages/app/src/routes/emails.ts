@@ -187,11 +187,11 @@ emailRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
 
   const row = await e.DB.prepare(
-    `SELECT ${SUMMARY_COLS}, e.to_address, e.message_id, e.body_text, e.raw_r2_key, e.html_r2_key
+    `SELECT ${SUMMARY_COLS}, e.to_address, e.message_id, e.body_text, e.raw_r2_key, e.html_r2_key, e.blocked_images
      FROM emails e WHERE e.id = ?1`
   )
     .bind(id)
-    .first<SummaryRow & { to_address: string; message_id: string | null; body_text: string; raw_r2_key: string; html_r2_key: string | null }>();
+    .first<SummaryRow & { to_address: string; message_id: string | null; body_text: string; raw_r2_key: string; html_r2_key: string | null; blocked_images: number }>();
 
   if (!row) return c.json({ error: 'Not found' }, 404);
 
@@ -227,6 +227,7 @@ emailRoutes.get('/:id', async (c) => {
     size_bytes: row.size_bytes,
     received_at: row.received_at,
     html_r2_key: row.html_r2_key,
+    blocked_images: row.blocked_images ?? 0,
     attachments: atts.results,
     labels: labels.results,
   };
@@ -359,14 +360,106 @@ emailRoutes.get('/:id/raw', async (c) => {
 
 // ---- GET /:id/html (stream sanitized HTML) --------------------------------
 
+/** Raster types safe to embed. SVG is excluded — it can carry script. */
+const INLINEABLE = new Set([
+  'image/png', 'image/jpeg', 'image/jpg', 'image/gif',
+  'image/webp', 'image/bmp', 'image/avif',
+]);
+
+/** Caps on embedding: a body is built in memory and sent in one response. */
+const MAX_INLINE_BYTES = 1_000_000;
+const MAX_INLINE_TOTAL = 5_000_000;
+
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const CHUNK = 0x8000; // avoid blowing the argument limit on large images
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Serve the message body as it was sent.
+ *
+ * Nothing is stripped for presentation — the layout an email was designed
+ * with is the point. Safety comes from the response headers instead:
+ *
+ * - `sandbox` gives the document a unique origin and kills scripting, and it
+ *   applies even if the URL is opened directly rather than in the iframe.
+ * - `img-src` is what withholds remote images. Blocking is therefore a header
+ *   concern, not a reason to rewrite the sender's HTML; `?images=1` simply
+ *   widens it, which is what the reading pane's button requests.
+ *
+ * Embedded images (`src="cid:…"`) are inlined as data: URIs rather than
+ * pointed at /api/attachments: under `sandbox` the document has a null origin,
+ * so an authenticated subresource request cannot be relied on to carry the
+ * session cookie.
+ */
 emailRoutes.get('/:id/html', async (c) => {
   const e = c.env;
   const id = c.req.param('id');
+  const showRemote = c.req.query('images') === '1';
+
   const row = await e.DB.prepare('SELECT html_r2_key FROM emails WHERE id = ?1').bind(id).first<{ html_r2_key: string | null }>();
   if (!row || !row.html_r2_key) return c.json({ error: 'Not found' }, 404);
   const obj = await e.HTML_BUCKET.get(row.html_r2_key);
   if (!obj) return c.json({ error: 'Not found' }, 404);
-  return new Response(obj.body, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+
+  let html = await obj.text();
+
+  // Bodies stored by older releases had their image sources rewritten. Put
+  // them back so those messages still show pictures when asked.
+  if (showRemote) html = html.replace(/data-blocked-src=/gi, 'src=');
+
+  const cidRefs = /src\s*=\s*(?:"cid:([^"]+)"|'cid:([^']+)'|cid:([^\s>]+))/gi;
+  if (cidRefs.test(html)) {
+    cidRefs.lastIndex = 0;
+    const atts = await e.DB.prepare(
+      `SELECT id, content_id, content_type, size_bytes, r2_key
+         FROM attachments WHERE email_id = ?1 AND content_id <> ''`
+    ).bind(id).all<{ id: string; content_id: string; content_type: string; size_bytes: number; r2_key: string }>();
+
+    const byCid = new Map<string, typeof atts.results[number]>();
+    for (const a of atts.results || []) byCid.set(a.content_id.toLowerCase(), a);
+
+    let budget = MAX_INLINE_TOTAL;
+    const resolved = new Map<string, string>();
+
+    for (const [, a] of byCid) {
+      const type = (a.content_type || '').toLowerCase().split(';')[0]!.trim();
+      if (!INLINEABLE.has(type)) continue;
+      if (a.size_bytes > MAX_INLINE_BYTES || a.size_bytes > budget) continue;
+      const blob = await e.ATTACHMENTS_BUCKET.get(a.r2_key);
+      if (!blob) continue;
+      const buf = await blob.arrayBuffer();
+      budget -= buf.byteLength;
+      resolved.set(a.content_id.toLowerCase(), `data:${type};base64,${toBase64(buf)}`);
+    }
+
+    html = html.replace(cidRefs, (whole, d, s, bare) => {
+      const cid = String(d || s || bare || '').trim().toLowerCase();
+      const dataUri = resolved.get(cid);
+      // Anything unresolved stays as written rather than becoming a bad request.
+      return dataUri ? `src="${dataUri}"` : whole;
+    });
+  }
+
+  const imgSrc = showRemote ? "img-src 'self' data: https: http:" : "img-src 'self' data:";
+
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': [
+        "default-src 'none'",
+        "style-src 'unsafe-inline'",
+        imgSrc,
+        'font-src data:',
+        'sandbox',
+      ].join('; '),
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+    },
   });
 });

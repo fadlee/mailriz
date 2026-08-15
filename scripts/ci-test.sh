@@ -15,8 +15,11 @@ CODE=$?
 echo "$OUT"
 
 if [ "$CODE" -eq 124 ]; then
-  # Timed out: tests had already run. Pass unless the output shows failures.
-  if echo "$OUT" | grep -qE "\(fail\)|^error:|✗"; then
+  # Timed out: tests had already run. Pass unless the output shows real
+  # test failures (bun prints "(fail)" for them). Do NOT match "error:"
+  # lines — bun itself prints "script terminated by SIGTERM" when timeout
+  # kills it, which is expected here.
+  if echo "$OUT" | grep -qE "\(fail\)|✗"; then
     echo "⚠ test timed out AND shows failures — failing." >&2
     exit 1
   fi

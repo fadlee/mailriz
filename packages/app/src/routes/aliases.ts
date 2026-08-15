@@ -12,7 +12,7 @@ aliasRoutes.get('/', async (c) => {
   const user = c.get('user');
 
   const rows = await e.DB.prepare(
-    `SELECT a.id, a.local_part, a.domain, a.label, a.note, a.is_enabled, a.created_at,
+    `SELECT a.id, a.local_part, a.domain, a.label, a.note, a.is_enabled, a.is_auto, a.created_at,
             (SELECT COUNT(*) FROM emails em WHERE em.alias_id = a.id) AS email_count,
             (SELECT MAX(received_at) FROM emails em WHERE em.alias_id = a.id) AS last_received_at
      FROM aliases a
@@ -74,7 +74,7 @@ aliasRoutes.post('/', async (c) => {
   }
 
   const created = await e.DB.prepare(
-    `SELECT id, local_part, domain, label, note, is_enabled, created_at,
+    `SELECT id, local_part, domain, label, note, is_enabled, is_auto, created_at,
             (SELECT COUNT(*) FROM emails em WHERE em.alias_id = a.id) AS email_count,
             (SELECT MAX(received_at) FROM emails em WHERE em.alias_id = a.id) AS last_received_at
      FROM aliases a WHERE a.id = ?1`
@@ -110,7 +110,7 @@ aliasRoutes.patch('/:id', async (c) => {
     .run();
 
   const updated = await e.DB.prepare(
-    `SELECT id, local_part, domain, label, note, is_enabled, created_at,
+    `SELECT id, local_part, domain, label, note, is_enabled, is_auto, created_at,
             (SELECT COUNT(*) FROM emails em WHERE em.alias_id = a.id) AS email_count,
             (SELECT MAX(received_at) FROM emails em WHERE em.alias_id = a.id) AS last_received_at
      FROM aliases a WHERE a.id = ?1`

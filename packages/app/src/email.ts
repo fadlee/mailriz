@@ -1,15 +1,17 @@
 import PostalMime from 'postal-mime';
 import { ulid } from 'ulid';
 import { Env } from './types';
-import { makeSnippet } from '@mailriz/shared';
+import { makeSnippet, ALIAS_LOCAL_PART_RE } from '@mailriz/shared';
 import { sanitizeHtml } from './lib/sanitize';
 
 /**
  * Inbound email handler — called by Cloudflare Email Routing.
  *
  * Flow:
- *  1. Resolve the alias from message.to (local_part + domain).
- *  2. Reject unknown/disabled addresses at SMTP level (spam backpressure).
+ *  1. Resolve the alias from message.to (local_part + domain), creating it
+ *     on first delivery for any address on MAIL_DOMAIN (catch-all).
+ *  2. Reject disabled addresses, other domains, and bursts beyond the daily
+ *     auto-create budget at SMTP level (spam backpressure).
  *  3. Store raw .eml in R2.
  *  4. Parse with postal-mime; store attachments in R2.
  *  5. Sanitize HTML → R2 (html bucket), keep body_text + snippet in D1.
@@ -78,6 +80,65 @@ interface StoredAttachment {
   r2Key: string;
 }
 
+interface AliasRow {
+  id: string;
+  local_part: string;
+  domain: string;
+  is_enabled: number;
+}
+
+/** How many addresses the catch-all may materialise in a rolling day. */
+const AUTO_ALIAS_DAILY_LIMIT = 50;
+
+function findAlias(env: Env, localPart: string, domain: string): Promise<AliasRow | null> {
+  return env.DB.prepare(
+    'SELECT id, local_part, domain, is_enabled FROM aliases WHERE local_part = ?1 AND domain = ?2'
+  ).bind(localPart, domain).first<AliasRow>();
+}
+
+/**
+ * Whether to refuse an address that has no alias yet — returns the SMTP
+ * rejection reason, or null to accept and create one.
+ *
+ * The catch-all only covers our own mail domain, only syntactically valid
+ * local parts, and only up to a daily budget: Email Routing hands us every
+ * address a spammer cares to guess, and each one would otherwise become a
+ * permanent alias row.
+ */
+async function catchAllRefusal(env: Env, localPart: string, domain: string): Promise<string | null> {
+  const mailDomain = (env.MAIL_DOMAIN || '').toLowerCase();
+  if (!mailDomain || domain !== mailDomain) return 'Address not found';
+  if (!ALIAS_LOCAL_PART_RE.test(localPart)) return 'Address not found';
+
+  const since = Math.floor(Date.now() / 1000) - 24 * 60 * 60;
+  const row = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM aliases WHERE is_auto = 1 AND created_at > ?1'
+  ).bind(since).first<{ n: number }>();
+
+  if ((row?.n ?? 0) >= AUTO_ALIAS_DAILY_LIMIT) {
+    // Temporary failure: legitimate senders retry, so a burst of guessed
+    // addresses doesn't permanently lose real mail.
+    return 'Too many new addresses today, try again later';
+  }
+  return null;
+}
+
+/** Materialise an alias for an address seen for the first time. */
+async function createAutoAlias(env: Env, localPart: string, domain: string): Promise<AliasRow | null> {
+  const id = ulid();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO aliases (id, user_id, local_part, domain, label, note, is_auto)
+       VALUES (?1, ?2, ?3, ?4, '', '', 1)`
+    ).bind(id, env.ADMIN_EMAIL || '', localPart, domain).run();
+    return { id, local_part: localPart, domain, is_enabled: 1 };
+  } catch {
+    // Two messages to the same new address can race on UNIQUE(local_part,
+    // domain); whichever lost simply reads the winner's row.
+    return findAlias(env, localPart, domain);
+  }
+}
+
 export async function emailHandler(message: EmailMessageLike, env: Env): Promise<void> {
   // 1. Parse recipient.
   let toAddr = message.to || '';
@@ -89,14 +150,32 @@ export async function emailHandler(message: EmailMessageLike, env: Env): Promise
     toDomain = toAddr.slice(lt + 1).trim().toLowerCase();
   }
 
-  // 2. Look up alias.
-  const alias = await env.DB.prepare(
-    'SELECT id, local_part, domain, is_enabled FROM aliases WHERE local_part = ?1 AND domain = ?2'
-  ).bind(toLocal, toDomain).first<{ id: string; local_part: string; domain: string; is_enabled: number }>();
+  // Subaddressing: news+netflix@ delivers to the alias `news`, rather than
+  // minting a separate alias per tag.
+  const plus = toLocal.indexOf('+');
+  const baseLocal = plus === -1 ? toLocal : toLocal.slice(0, plus);
 
-  if (!alias || !alias.is_enabled) {
+  // 2. Resolve the alias, creating it on first delivery if this is a new
+  //    address on our own mail domain — the catch-all promise.
+  let alias = await findAlias(env, baseLocal, toDomain);
+
+  if (alias && !alias.is_enabled) {
+    // Explicitly disabled by the owner: stay rejected, and do not resurrect it.
     message.setReject('Address not found');
     return;
+  }
+
+  if (!alias) {
+    const reason = await catchAllRefusal(env, baseLocal, toDomain);
+    if (reason) {
+      message.setReject(reason);
+      return;
+    }
+    alias = await createAutoAlias(env, baseLocal, toDomain);
+    if (!alias) {
+      message.setReject('Address not found');
+      return;
+    }
   }
 
   const id = ulid();

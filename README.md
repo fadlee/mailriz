@@ -13,7 +13,12 @@ alias per service, keep them forever, and read everything in one dashboard.
 
 ## What you get
 
-- **Persistent aliases** — every alias you create works forever (or until you disable it).
+- **Catch-all by default** — any address on your domain works immediately. Invent
+  `netflix@your.domain` at signup; the alias appears in the dashboard when the first
+  mail lands. Up to 50 new addresses a day, so a spammer guessing addresses can't
+  mint unlimited aliases; beyond that the sender gets a retryable temporary failure.
+- **Persistent aliases** — every alias works forever (or until you disable it).
+  Disabling one keeps it rejected — the catch-all will not resurrect it.
 - **Gmail-like dashboard** — inbox/starred/archived/trash, labels, search, keyboard
   shortcuts, dark mode, infinite scroll, bulk actions.
 - **Catch-all email routing** — everything to `*@your.domain` flows into the Worker.
@@ -57,8 +62,12 @@ Internet email ──► Cloudflare Email Routing (MX/SPF auto)
             FTS5 search
 ```
 
-- **Email Routing** — catch-all → Worker. Unknown/disabled aliases are rejected at SMTP
-  level (`setReject`), so spam bounces before storage.
+- **Email Routing** — catch-all → Worker. A new address on your mail domain is accepted
+  and its alias created on first delivery. Disabled aliases, other domains, malformed
+  local parts, and bursts past the daily budget are rejected at SMTP level
+  (`setReject`), so spam bounces before storage.
+- **Subaddressing** — `news+netflix@` delivers to the alias `news`, rather than creating
+  one alias per tag.
 - **Worker** — single Worker with three roles: `email()` handler, Hono API, static assets.
 - **D1** — SQLite database with FTS5 virtual table (trigger-synced) for search.
 - **R2** — raw `.eml`, attachment blobs, and sanitized HTML bodies (keeps D1 rows small).

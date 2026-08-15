@@ -179,20 +179,91 @@ export async function enableEmailRouting(token: string, zoneId: string): Promise
   return cfFetch<{ enabled: boolean }>(token, `/zones/${zoneId}/email/routing/enable`, { method: 'POST' });
 }
 
-export async function createEmailRoutingRule(
+/**
+ * Point the catch-all at a Worker.
+ *
+ * The catch-all is not an ordinary rule: it lives at its own path and is
+ * updated with PUT. Posting a `{type:"all"}` matcher to /rules is rejected
+ * with "Invalid rule operation", which is what used to surface here.
+ */
+export async function setCatchAllToWorker(
   token: string,
   zoneId: string,
-  matcher: { type: 'all' | 'custom'; field?: string; value?: string },
-  action: { type: 'forward' | 'worker'; value: string[] }
+  workerName: string
 ): Promise<unknown> {
-  const body = {
-    matchers: [matcher.type === 'all' ? { type: 'all' } : { type: 'custom', field: matcher.field, value: matcher.value }],
-    actions: [action.type === 'worker' ? { type: 'worker', value: action.value } : { type: 'forward', value: action.value }],
-    enabled: true,
-  };
-  return cfFetch(token, `/zones/${zoneId}/email/routing/rules`, {
+  return cfFetch(token, `/zones/${zoneId}/email/routing/rules/catch_all`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: 'mailriz catch-all',
+      enabled: true,
+      matchers: [{ type: 'all' }],
+      actions: [{ type: 'worker', value: [workerName] }],
+    }),
+  });
+}
+
+// --- Zero Trust / Access ---
+
+export interface AccessOrganization {
+  /** `<team>.cloudflareaccess.com` — the Zero Trust team domain. */
+  auth_domain: string;
+}
+
+/**
+ * Doubles as the probe for whether this token can do Access at all: a token
+ * without Zero Trust scope answers 403 here, which lets the wizard ask about
+ * auth *before* deploying rather than failing at the end.
+ */
+export async function getAccessOrganization(
+  token: string,
+  accountId: string
+): Promise<AccessOrganization> {
+  return cfFetch<AccessOrganization>(token, `/accounts/${accountId}/access/organizations`);
+}
+
+export interface AccessApp {
+  id: string;
+  /** Audience tag the Worker checks incoming Access JWTs against. */
+  aud: string;
+}
+
+export async function createAccessApp(
+  token: string,
+  accountId: string,
+  name: string,
+  hostname: string
+): Promise<AccessApp> {
+  const app = await cfFetch<AccessApp>(token, `/accounts/${accountId}/access/apps`, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      name,
+      domain: hostname,
+      type: 'self_hosted',
+      session_duration: '24h',
+    }),
+  });
+  if (!app?.id) throw new Error('Access app was created but returned no id');
+  if (app.aud) return app;
+  // The audience tag is what the Worker validates against, so if the create
+  // payload omitted it, read it back rather than deploying a blank one.
+  const fetched = await cfFetch<AccessApp>(token, `/accounts/${accountId}/access/apps/${app.id}`);
+  if (!fetched?.aud) throw new Error('Access app has no aud tag');
+  return fetched;
+}
+
+export async function createAccessPolicy(
+  token: string,
+  accountId: string,
+  appId: string,
+  adminEmail: string
+): Promise<unknown> {
+  return cfFetch(token, `/accounts/${accountId}/access/apps/${appId}/policies`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'mailriz admin',
+      decision: 'allow',
+      include: [{ email: { email: adminEmail } }],
+    }),
   });
 }
 

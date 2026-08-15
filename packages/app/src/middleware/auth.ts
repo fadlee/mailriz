@@ -18,7 +18,7 @@ export function env(c: { env: Env }): Env {
 }
 
 const ACCESS_JWT_HEADER = 'Cf-Access-Jwt-Assertion';
-const SESSION_COOKIE = 'rizmail_session';
+const SESSION_COOKIE = 'mailriz_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 async function sha256Hex(input: string): Promise<string> {

@@ -1,7 +1,7 @@
 import PostalMime from 'postal-mime';
 import { ulid } from 'ulid';
 import { Env } from './types';
-import { makeSnippet } from '@rizmail/shared';
+import { makeSnippet } from '@mailriz/shared';
 import { sanitizeHtml } from './lib/sanitize';
 
 /**

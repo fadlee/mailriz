@@ -1,5 +1,5 @@
 {
-  "name": "rizmail-app",
+  "name": "mailriz-app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,11 +10,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.worker.json && bun run --cwd web typecheck",
     "test": "bun test",
     "test:ci": "bun test test/sanitize.test.ts && bun test test/email-handler.test.ts",
-    "db:migrate:local": "wrangler d1 migrations apply rizmail --local",
-    "db:migrate:remote": "wrangler d1 migrations apply rizmail --remote"
+    "db:migrate:local": "wrangler d1 migrations apply mailriz --local",
+    "db:migrate:remote": "wrangler d1 migrations apply mailriz --remote"
   },
   "dependencies": {
-    "@rizmail/shared": "workspace:*",
+    "@mailriz/shared": "workspace:*",
     "hono": "^4",
     "postal-mime": "^2",
     "ulid": "^2"

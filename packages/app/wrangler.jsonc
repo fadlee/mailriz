@@ -1,5 +1,5 @@
 {
-  "name": "rizmail",
+  "name": "mailriz",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -23,7 +23,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "rizmail",
+      "database_name": "mailriz",
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
@@ -31,18 +31,18 @@
   "r2_buckets": [
     {
       "binding": "RAW_BUCKET",
-      "bucket_name": "rizmail-raw",
-      "preview_bucket_name": "rizmail-raw-preview"
+      "bucket_name": "mailriz-raw",
+      "preview_bucket_name": "mailriz-raw-preview"
     },
     {
       "binding": "ATTACHMENTS_BUCKET",
-      "bucket_name": "rizmail-attachments",
-      "preview_bucket_name": "rizmail-attachments-preview"
+      "bucket_name": "mailriz-attachments",
+      "preview_bucket_name": "mailriz-attachments-preview"
     },
     {
       "binding": "HTML_BUCKET",
-      "bucket_name": "rizmail-html",
-      "preview_bucket_name": "rizmail-html-preview"
+      "bucket_name": "mailriz-html",
+      "preview_bucket_name": "mailriz-html-preview"
     }
   ]
 }

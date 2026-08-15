@@ -1,5 +1,5 @@
 /**
- * rizmail-cli — interactive deployment wizard for rizmail.
+ * mailriz-cli — interactive deployment wizard for MailRiz.
  *
  * Commands:
  *   setup    Deploy end-to-end (Worker + D1 + R2 + DNS + Email Routing + Access)
@@ -26,10 +26,10 @@ import {
 } from './cf';
 
 const execFileP = promisify(execFile);
-const CONFIG_DIR = join(homedir(), '.rizmail');
+const CONFIG_DIR = join(homedir(), '.mailriz');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const TMP_DIR = join(CONFIG_DIR, '.temp');
-const RELEASE_URL = 'https://github.com/rizkirmdhnnn/rizmail/releases/latest/download/rizmail-worker.tar.gz';
+const RELEASE_URL = 'https://github.com/rizkirmdhnnn/mailriz/releases/latest/download/mailriz-worker.tar.gz';
 
 interface Config {
   account_id: string;
@@ -70,7 +70,7 @@ async function saveConfig(cfg: Config): Promise<void> {
 
 async function fetchReleaseAsset(): Promise<{ dir: string; index: string; migrationsDir: string; assetsDir: string }> {
   await mkdir(TMP_DIR, { recursive: true });
-  const tarPath = join(TMP_DIR, 'rizmail-worker.tar.gz');
+  const tarPath = join(TMP_DIR, 'mailriz-worker.tar.gz');
   const res = await fetch(RELEASE_URL);
   if (!res.ok) throw new Error(`Failed to fetch release: HTTP ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
@@ -121,7 +121,7 @@ async function deployWithWrangler(opts: {
       DASHBOARD_HOSTNAME: opts.dashboardHostname,
     },
     d1_databases: [
-      { binding: 'DB', database_name: 'rizmail', database_id: opts.d1Id, migrations_dir: 'migrations' },
+      { binding: 'DB', database_name: 'mailriz', database_id: opts.d1Id, migrations_dir: 'migrations' },
     ],
     r2_buckets: [
       { binding: 'RAW_BUCKET', bucket_name: opts.r2Raw },
@@ -142,7 +142,7 @@ async function deployWithWrangler(opts: {
 // ---------------------------------------------------------------- setup
 
 async function cmdSetup() {
-  intro(pc.bold('📬 rizmail setup'));
+  intro(pc.bold('📬 MailRiz setup'));
 
   // 1. Bun version check (minimum).
   try {
@@ -260,8 +260,8 @@ async function cmdSetup() {
   // 6. D1 provision.
   sp.start('Provisioning D1 database…');
   const d1s = await listD1(token, accountId);
-  let d1 = d1s.find((d) => d.name === 'rizmail');
-  if (!d1) d1 = await createD1(token, accountId, 'rizmail');
+  let d1 = d1s.find((d) => d.name === 'mailriz');
+  if (!d1) d1 = await createD1(token, accountId, 'mailriz');
   sp.stop(`✓ D1 ${d1.id}`);
 
   // Apply migrations.
@@ -280,14 +280,14 @@ async function cmdSetup() {
   // 7. R2 provision.
   sp.start('Provisioning R2 buckets…');
   const r2s = await listR2Buckets(token, accountId);
-  const r2Raw = r2s.find((b) => b.name === 'rizmail-raw') || await createR2Bucket(token, accountId, 'rizmail-raw');
-  const r2Att = r2s.find((b) => b.name === 'rizmail-attachments') || await createR2Bucket(token, accountId, 'rizmail-attachments');
-  const r2Html = r2s.find((b) => b.name === 'rizmail-html') || await createR2Bucket(token, accountId, 'rizmail-html');
+  const r2Raw = r2s.find((b) => b.name === 'mailriz-raw') || await createR2Bucket(token, accountId, 'mailriz-raw');
+  const r2Att = r2s.find((b) => b.name === 'mailriz-attachments') || await createR2Bucket(token, accountId, 'mailriz-attachments');
+  const r2Html = r2s.find((b) => b.name === 'mailriz-html') || await createR2Bucket(token, accountId, 'mailriz-html');
   sp.stop('✓ R2 ready');
 
   // 8. Deploy worker (wrangler child process with generated wrangler.jsonc).
   sp.start('Deploying Worker…');
-  const workerName = 'rizmail';
+  const workerName = 'mailriz';
   try {
     await deployWithWrangler({
       token,
@@ -331,7 +331,7 @@ async function cmdSetup() {
     await createEmailRoutingRule(token, zoneId, { type: 'all' }, { type: 'worker', value: [workerName] });
   } catch (e: any) {
     sp.stop('✗');
-    note(`Email Routing setup failed (${e.message}). Enable it manually in the dashboard: Email → Email Routing → Enable, then add a catch-all rule to Worker "rizmail".`, 'Manual step needed');
+    note(`Email Routing setup failed (${e.message}). Enable it manually in the dashboard: Email → Email Routing → Enable, then add a catch-all rule to Worker "mailriz".`, 'Manual step needed');
   }
   sp.stop('✓ Email Routing ready');
 
@@ -386,7 +386,7 @@ async function cmdSetup() {
   outro(
     pc.green(`Done! Dashboard: https://${dashboardHostname}\n`) +
     pc.cyan(`Test: send an email to anything@${zoneObj.name}\n`) +
-    pc.dim(`State saved to ~/.rizmail/config.json (chmod 600)`)
+    pc.dim(`State saved to ~/.mailriz/config.json (chmod 600)`)
   );
 }
 
@@ -405,7 +405,7 @@ async function setupAccess(token: string, accountId: string, hostname: string, a
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: 'rizmail',
+      name: 'mailriz',
       domain: hostname,
       type: 'self_hosted',
       session_duration: '24h',
@@ -435,9 +435,9 @@ async function setupAccess(token: string, accountId: string, hostname: string, a
 // ---------------------------------------------------------------- status
 
 async function cmdStatus() {
-  intro(pc.bold('📊 rizmail status'));
+  intro(pc.bold('📊 MailRiz status'));
   const cfg = await loadConfig();
-  if (!cfg) fail('Not installed. Run `rizmail-cli setup` first.');
+  if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
   note(`Dashboard: ${cfg.dashboard_hostname}\nAdmin: ${cfg.admin_email}\nAuth: ${cfg.auth_mode}`, 'Installation');
 
@@ -459,9 +459,9 @@ async function cmdStatus() {
 // ---------------------------------------------------------------- update
 
 async function cmdUpdate() {
-  intro(pc.bold('🔄 rizmail update'));
+  intro(pc.bold('🔄 MailRiz update'));
   const cfg = await loadConfig();
-  if (!cfg) fail('Not installed. Run `rizmail-cli setup` first.');
+  if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
 
   const sp = spinner();
   sp.start('Fetching latest release…');
@@ -509,7 +509,7 @@ async function cmdUpdate() {
 // ---------------------------------------------------------------- destroy
 
 async function cmdDestroy() {
-  intro(pc.bold('💥 rizmail destroy'));
+  intro(pc.bold('💥 MailRiz destroy'));
   const cfg = await loadConfig();
   if (!cfg) fail('Not installed.');
 

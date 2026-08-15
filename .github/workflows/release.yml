@@ -40,8 +40,8 @@ jobs:
       - name: Create release tarball
         run: |
           cd .release
-          tar -czf ../rizmail-worker.tar.gz worker
-          ls -la ../rizmail-worker.tar.gz
+          tar -czf ../mailriz-worker.tar.gz worker
+          ls -la ../mailriz-worker.tar.gz
 
       - name: Build CLI
         run: bun run --cwd packages/cli build
@@ -57,5 +57,5 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: rizmail-worker.tar.gz
+          files: mailriz-worker.tar.gz
           generate_release_notes: true

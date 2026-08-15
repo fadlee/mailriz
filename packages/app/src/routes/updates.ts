@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
-import { EmailSummary } from '@rizmail/shared';
+import { EmailSummary } from '@mailriz/shared';
 
 export const updatesRoutes = new Hono<AppContext>();
 

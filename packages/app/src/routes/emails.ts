@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
-import { EmailSummary, EmailDetail, EmailListResponse, EmailView, BulkInput, UpdateEmailInput } from '@rizmail/shared';
+import { EmailSummary, EmailDetail, EmailListResponse, EmailView, BulkInput, UpdateEmailInput } from '@mailriz/shared';
 
 export const emailRoutes = new Hono<AppContext>();
 

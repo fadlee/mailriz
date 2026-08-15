@@ -9,7 +9,7 @@
   "scripts": {
     "build": "bun run --cwd packages/app build",
     "typecheck": "bun run --cwd packages/app typecheck && bun run --cwd packages/cli typecheck && bun run --cwd packages/app/web typecheck",
-    "test": "bun run --cwd packages/app test",
+    "test": "bun run --cwd packages/app test && bun run --cwd packages/cli test",
     "dev:app": "bun run --cwd packages/app dev",
     "dev:web": "bun run --cwd packages/app/web dev"
   },

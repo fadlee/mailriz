@@ -71,11 +71,14 @@ jobs:
             echo "NPM_TOKEN secret is not set — add it with: gh secret set NPM_TOKEN" >&2
             exit 1
           fi
-          cd packages/cli
+          # Publish from a temp copy outside the repo: npm refuses to publish a
+          # workspace member (ENOWORKSPACES) whenever the repo root declares
+          # `workspaces`, regardless of --workspaces=false.
+          TMP_PKG="$(mktemp -d)"
+          cp -r packages/cli/. "$TMP_PKG/"
+          cd "$TMP_PKG"
           npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN}"
-          # --workspaces=false: npm refuses to publish a workspace member
-          # (ENOWORKSPACES) because the repo root declares `workspaces`.
-          npm publish --access public --workspaces=false
+          npm publish --access public
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v2

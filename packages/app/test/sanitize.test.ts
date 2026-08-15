@@ -51,4 +51,15 @@ describe('sanitizeHtml', () => {
     const out = sanitizeHtml('a < b');
     expect(out).toContain('a &lt; b');
   });
+
+  it('does not loop forever on malformed HTML (regression)', () => {
+    // Input with '<' but no closing '>' used to infinite-loop the tokenizer.
+    const out = sanitizeHtml('a < b < c');
+    expect(out).toContain('a &lt; b &lt; c');
+  });
+
+  it('handles a bare "<" at end of input', () => {
+    const out = sanitizeHtml('text <');
+    expect(out).toBe('text &lt;');
+  });
 });

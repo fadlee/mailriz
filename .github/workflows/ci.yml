@@ -24,12 +24,5 @@ jobs:
       - name: Build web
         run: bun run --cwd packages/app/web build
 
-      - name: Test (sanitizer)
-        run: |
-          cd packages/app
-          bun test test/sanitize.test.ts
-
-      - name: Test (email handler)
-        run: |
-          cd packages/app
-          bun test test/email-handler.test.ts
+      - name: Test
+        run: bun run --cwd packages/app test

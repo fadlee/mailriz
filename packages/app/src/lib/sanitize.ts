@@ -81,12 +81,18 @@ export function sanitizeHtml(input: string): string {
   const readTag = (): { tag: string; raw: string } | null => {
     const start = i;
     // find '>'; if none exists, this is not a real tag (escape the '<').
-    let j = input.indexOf('>', i);
-    if (j === -1) return null;
+    const j = input.indexOf('>', i);
+    if (j === -1) {
+      i = start + 1; // consume just the '<' so the loop always advances
+      return null;
+    }
     const raw = input.slice(start, j + 1);
     i = j + 1;
     const m = /^<\s*(\/?)\s*([a-zA-Z0-9]+)/.exec(raw);
-    if (!m) return null;
+    if (!m) {
+      i = start + 1; // not a valid tag — consume just the '<'
+      return null;
+    }
     return { tag: m[2]!.toLowerCase(), raw };
   };
 

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # Required for npm trusted publishing (OIDC)
 
 jobs:
   release:
@@ -17,6 +18,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      # Trusted publishing needs npm CLI >= 11.5.1 + Node >= 22.14.
+      # setup-node gives us a recent npm; bun stays for the build.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Install deps
         run: bun install --frozen-lockfile
@@ -63,21 +70,16 @@ jobs:
           npm pkg delete devDependencies.@mailriz/shared
           echo "Publishing mailriz-cli@$VERSION"
 
+      # Trusted publishing: npm detects the GitHub OIDC environment and exchanges
+      # it for a short-lived npm token automatically. No NPM_TOKEN secret needed.
+      # Publish from a temp copy outside the repo: npm refuses to publish a
+      # workspace member (ENOWORKSPACES) whenever the repo root declares
+      # `workspaces`, regardless of --workspaces=false.
       - name: Publish CLI to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN secret is not set — add it with: gh secret set NPM_TOKEN" >&2
-            exit 1
-          fi
-          # Publish from a temp copy outside the repo: npm refuses to publish a
-          # workspace member (ENOWORKSPACES) whenever the repo root declares
-          # `workspaces`, regardless of --workspaces=false.
           TMP_PKG="$(mktemp -d)"
           cp -r packages/cli/. "$TMP_PKG/"
           cd "$TMP_PKG"
-          npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN}"
           npm publish --access public
 
       - name: GitHub Release

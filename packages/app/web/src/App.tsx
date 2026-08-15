@@ -10,6 +10,8 @@ import {
   EmailView, Label, MeResponse, CreateAliasInput,
 } from '@mailriz/shared';
 import { api, ApiError } from './lib/api';
+import { useRoute } from './lib/useRoute';
+import { scopeTo, type Route } from './lib/route';
 import { timeAgo, formatSize, initials, avatarColor } from './lib/format';
 import {
   Inbox, Star, Archive, Trash2, Tag, Plus, Search, Mail, MailOpen,
@@ -132,11 +134,11 @@ export default function App() {
 type Theme = ReturnType<typeof useTheme>;
 
 function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
-  const [view, setView] = useState<EmailView>('inbox');
-  const [aliasId, setAliasId] = useState<string | null>(null);
-  const [labelId, setLabelId] = useState<string | null>(null);
-  const [q, setQ] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The URL holds what's on screen, so a reload or the back button lands where
+  // you were instead of resetting to the inbox.
+  const { route, navigate } = useRoute();
+  const { view, aliasId, labelId, q, emailId: selectedId } = route;
+
   const [showNewAlias, setShowNewAlias] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
 
@@ -157,11 +159,19 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
       ? activeLabel.name
       : VIEWS.find((v) => v.id === view)!.label;
 
-  const pick = (next: () => void) => {
-    next();
-    setSelectedId(null);
+  /** Switch folder/alias/label: closes the message and the mobile drawer, and
+   *  clears the search — landing in an apparently empty Trash because a filter
+   *  carried over reads as a bug. */
+  const goScope = (patch: Partial<Route>) => {
+    navigate(scopeTo(patch));
     setNavOpen(false);
   };
+
+  const openEmail = (id: string | null) => navigate({ ...route, emailId: id });
+
+  // Replace rather than push: one history entry per keystroke would make the
+  // back button useless.
+  const setQ = (next: string) => navigate({ ...route, q: next, emailId: null }, { replace: true });
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
@@ -181,8 +191,8 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
         labelId={labelId}
         aliases={aliases.data}
         labels={labels.data}
-        onPickAlias={(id) => pick(() => { setAliasId(id); setLabelId(null); })}
-        onPickLabel={(id) => pick(() => { setLabelId(id); setAliasId(null); })}
+        onPickAlias={(id) => goScope({ aliasId: id })}
+        onPickLabel={(id) => goScope({ labelId: id })}
         onNewAlias={() => { setShowNewAlias(true); setNavOpen(false); }}
         me={me}
       />
@@ -218,7 +228,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
               scoped={!!(aliasId || labelId)}
               unread={emails.emails.filter((e) => !e.is_read).length}
               hasMore={!!emails.next}
-              onPick={(v) => pick(() => { setView(v); setAliasId(null); setLabelId(null); })}
+              onPick={(v) => goScope({ view: v })}
             />
 
             {/* List and reading pane only sit side by side from xl up. Below
@@ -233,7 +243,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
               <EmailList
                 emails={emails.emails}
                 selectedId={selectedId}
-                setSelectedId={setSelectedId}
+                setSelectedId={openEmail}
                 loadMore={emails.loadMore}
                 hasMore={emails.next !== null}
                 isLoading={emails.isLoading}
@@ -247,7 +257,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
               )}
             >
               {selectedEmail ? (
-                <ReadingPane emailId={selectedEmail.id} onBack={() => setSelectedId(null)} />
+                <ReadingPane emailId={selectedEmail.id} onBack={() => openEmail(null)} />
               ) : (
                 <EmptyPane />
               )}

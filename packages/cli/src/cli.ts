@@ -123,7 +123,13 @@ async function deployWithWrangler(opts: {
     compatibility_date: '2026-06-01',
     compatibility_flags: ['nodejs_compat'],
     workers_dev: false,
-    assets: { directory: './assets', binding: 'ASSETS' },
+    // not_found_handling: the dashboard routes client-side, so a reload on
+    // /inbox or /alias/:id has to serve index.html instead of 404ing.
+    assets: {
+      directory: './assets',
+      binding: 'ASSETS',
+      not_found_handling: 'single-page-application',
+    },
     triggers: { crons: ['0 4 * * *'] },
     // A Custom Domain, not a route: Cloudflare creates the DNS record and
     // issues the certificate. A plain workers route matches URLs but creates

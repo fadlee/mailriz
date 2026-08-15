@@ -500,11 +500,20 @@ function Sidebar(props: {
                 )}
               >
                 <span className="truncate">@{a.local_part}</span>
-                {!a.is_enabled && (
+                {!a.is_enabled ? (
                   <span className="shrink-0 rounded-pill bg-surface-3 px-2 py-0.5 text-[11px] font-semibold text-text-faint">
                     off
                   </span>
-                )}
+                ) : a.is_auto ? (
+                  /* Created by the catch-all on first delivery, not by hand —
+                     worth marking so an unfamiliar address is explicable. */
+                  <span
+                    title="Created automatically when mail first arrived"
+                    className="shrink-0 rounded-pill bg-surface-3 px-2 py-0.5 text-[11px] font-semibold text-text-faint"
+                  >
+                    auto
+                  </span>
+                ) : null}
               </button>
             ))}
           </>

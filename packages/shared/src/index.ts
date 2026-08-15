@@ -22,6 +22,8 @@ export interface Alias {
   label: string;
   note: string;
   is_enabled: number; // 0 | 1
+  /** 1 when the catch-all created this on first delivery. */
+  is_auto?: number;
   created_at: number;
   email_count: number;
   last_received_at: number | null;

@@ -144,8 +144,10 @@ describe('incoming mail lookup', () => {
     } as any;
   }
 
-  it('rejects mail for an alias stored on the dashboard host', async () => {
-    const env = makeEnv();
+  it('does not match an alias stored on the dashboard host', async () => {
+    // MAIL_DOMAIN unset disables the catch-all, isolating the lookup: with it
+    // on, this address would simply be created fresh (see catch-all.test.ts).
+    const env = makeEnv({ MAIL_DOMAIN: undefined });
     // The shape earlier builds produced.
     env.DB.aliases.push({ local_part: 'news', domain: 'inbox.example.com', is_enabled: 1, id: 'a1' });
 

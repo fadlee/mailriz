@@ -5,10 +5,17 @@ import { emailRoutes } from './routes/emails';
 import { labelRoutes } from './routes/labels';
 import { meRoutes } from './routes/me';
 import { updatesRoutes } from './routes/updates';
+import { authRoutes } from './routes/auth';
 import { jwtAuth } from './middleware/auth';
 import { AppContext } from './types';
 
 export const app = new Hono<AppContext>();
+
+// POST /api/login is how a session-mode user obtains their cookie, so it has
+// to be reachable unauthenticated. Order matters: Hono runs matching handlers
+// in registration order, and this one answers before jwtAuth is reached.
+// Keep it above the guard below.
+app.route('/api', authRoutes);
 
 app.use('/api/*', jwtAuth);
 

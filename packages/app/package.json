@@ -9,7 +9,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.worker.json && bun run --cwd web typecheck",
     "test": "bun test",
-    "test:ci": "bun test test/sanitize.test.ts && bun test test/email-handler.test.ts",
+    "test:ci": "bun test test/sanitize.test.ts && bun test test/email-handler.test.ts && bun test test/auth.test.ts",
     "db:migrate:local": "wrangler d1 migrations apply mailriz --local",
     "db:migrate:remote": "wrangler d1 migrations apply mailriz --remote"
   },

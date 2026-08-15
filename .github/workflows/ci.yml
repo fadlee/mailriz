@@ -25,9 +25,9 @@ jobs:
         run: bun run --cwd packages/app/web build
 
       - name: Test (sanitizer)
-        # Separate steps: postal-mime keeps the event loop alive, which makes a
-        # combined or chained `bun test` hang after completion.
-        run: bun run --cwd packages/app test test/sanitize.test.ts
+        # bun test 1.3.x hangs after completion on GitHub runners; the wrapper
+        # force-exits once results are printed (see scripts/ci-test.sh).
+        run: bash scripts/ci-test.sh --cwd packages/app test test/sanitize.test.ts
 
       - name: Test (email handler)
-        run: bun run --cwd packages/app test test/email-handler.test.ts
+        run: bash scripts/ci-test.sh --cwd packages/app test test/email-handler.test.ts

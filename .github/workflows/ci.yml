@@ -27,7 +27,11 @@ jobs:
       - name: Test (sanitizer)
         # bun test 1.3.x hangs after completion on GitHub runners; the wrapper
         # force-exits once results are printed (see scripts/ci-test.sh).
-        run: bash scripts/ci-test.sh --cwd packages/app test test/sanitize.test.ts
+        run: |
+          cd packages/app
+          bash ../../scripts/ci-test.sh test/sanitize.test.ts
 
       - name: Test (email handler)
-        run: bash scripts/ci-test.sh --cwd packages/app test test/email-handler.test.ts
+        run: |
+          cd packages/app
+          bash ../../scripts/ci-test.sh test/email-handler.test.ts

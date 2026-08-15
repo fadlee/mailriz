@@ -3,22 +3,22 @@
 #
 # bun test 1.3.x hangs after the suite completes on GitHub runners (the process
 # never exits). This wrapper runs the test with a hard deadline; if it times
-# out but the output shows no failures, we treat it as success.
+# out but the output shows no real failures, we treat it as success.
 #
-# Usage: bash scripts/ci-test.sh --cwd <pkg> test <file>
+# Usage: bash scripts/ci-test.sh <bun-test-args...>
+#   (run from the package dir, e.g. packages/app)
 
 set -uo pipefail
 
-OUT="$(timeout 90 bun run "$@" 2>&1)"
+OUT="$(timeout 90 bun test "$@" 2>&1)"
 CODE=$?
 
 echo "$OUT"
 
 if [ "$CODE" -eq 124 ]; then
   # Timed out: tests had already run. Pass unless the output shows real
-  # test failures (bun prints "(fail)" for them). Do NOT match "error:"
-  # lines — bun itself prints "script terminated by SIGTERM" when timeout
-  # kills it, which is expected here.
+  # test failures (bun prints "(fail)" for them). The "script terminated
+  # by SIGTERM" line that timeout produces is expected noise.
   if echo "$OUT" | grep -qE "\(fail\)|✗"; then
     echo "⚠ test timed out AND shows failures — failing." >&2
     exit 1

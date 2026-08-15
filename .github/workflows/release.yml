@@ -85,6 +85,9 @@ jobs:
           TMP_PKG="$(mktemp -d)"
           cp -r packages/cli/. "$TMP_PKG/"
           cd "$TMP_PKG"
+          # npm does not read NODE_AUTH_TOKEN directly — write it to .npmrc
+          # (setup-node normally does this when registry-url is given).
+          npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN}"
           npm publish --access public
 
       - name: GitHub Release

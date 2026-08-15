@@ -27,7 +27,6 @@ import {
   listD1, createD1, d1Query,
   listR2Buckets, createR2Bucket,
   enableEmailRouting, createEmailRoutingRule, getEmailRoutingSettings,
-  createWorkerRoute,
 } from './cf';
 
 const execFileP = promisify(execFile);
@@ -116,6 +115,10 @@ async function deployWithWrangler(opts: {
     workers_dev: false,
     assets: { directory: './assets', binding: 'ASSETS' },
     triggers: { crons: ['0 4 * * *'] },
+    // A Custom Domain, not a route: Cloudflare creates the DNS record and
+    // issues the certificate. A plain workers route matches URLs but creates
+    // no DNS, so the hostname would never resolve.
+    routes: [{ pattern: opts.dashboardHostname, custom_domain: true }],
     vars: {
       ADMIN_EMAIL: opts.adminEmail,
       ACCESS_TEAM_DOMAIN: '',
@@ -322,7 +325,6 @@ async function cmdSetup() {
     { key: 'migrations', label: 'migrations' },
     { key: 'r2', label: 'r2' },
     { key: 'worker', label: 'worker' },
-    { key: 'domain', label: 'domain' },
     { key: 'routing', label: 'email routing' },
     { key: 'access', label: 'access' },
     { key: 'health', label: 'health' },
@@ -363,18 +365,21 @@ async function cmdSetup() {
     const d1s = await listD1(effectiveToken, accountId);
     d1 = d1s.find((d) => d.name === 'mailriz');
     if (!d1) d1 = await createD1(effectiveToken, accountId, 'mailriz');
+    // A database without a uuid would otherwise flow into the query URL and
+    // the wrangler binding as "undefined" and fail much further along.
+    if (!d1.uuid) throw new Error('D1 API returned a database without a uuid');
   } catch (e: any) {
     tasks.failTask('d1', e.message);
     abort(`D1 provisioning failed: ${e.message}`);
   }
-  tasks.ok('d1', `mailriz (${d1.id.slice(0, 8)})`);
+  tasks.ok('d1', `mailriz (${d1.uuid.slice(0, 8)})`);
 
   // Migrations.
   tasks.run('migrations', `applying ${migrations.length}…`);
   try {
     for (const m of migrations) {
       const sql = await readFile(join(release.migrationsDir, m), 'utf8');
-      await d1Query(effectiveToken, accountId, d1.id, sql);
+      await d1Query(effectiveToken, accountId, d1.uuid, sql);
     }
   } catch (e: any) {
     tasks.failTask('migrations', e.message);
@@ -406,7 +411,7 @@ async function cmdSetup() {
       accountId,
       workerName,
       releaseDir: release.dir,
-      d1Id: d1.id,
+      d1Id: d1.uuid,
       r2Raw: r2Raw.name,
       r2Att: r2Att.name,
       r2Html: r2Html.name,
@@ -417,22 +422,15 @@ async function cmdSetup() {
     });
   } catch (e: any) {
     tasks.failTask('worker', e.message);
-    abort(`Worker deploy failed: ${e.message}`);
+    abort(
+      `Worker deploy failed: ${e.message}\n` +
+      `  If it mentions the custom domain, check that ${dashboardHostname} has no\n` +
+      `  existing DNS record — Cloudflare refuses to attach one over a CNAME.`
+    );
   }
-  tasks.ok('worker', workerName);
-
-  // Custom domain. Non-fatal: the worker is live, it just isn't bound yet.
-  tasks.run('domain', 'binding…');
-  try {
-    await createWorkerRoute(effectiveToken, zoneId, `${dashboardHostname}/*`, workerName);
-    await createWorkerRoute(effectiveToken, zoneId, dashboardHostname, workerName);
-    tasks.ok('domain', dashboardHostname);
-  } catch (e: any) {
-    tasks.warn('domain', 'needs a manual route', {
-      title: 'Custom domain not bound',
-      body: `${e.message}\n\nAdd it by hand: Workers & Pages → ${workerName} → Settings →\nDomains & Routes → Add → ${dashboardHostname}`,
-    });
-  }
+  // wrangler attaches the Custom Domain as part of the deploy, so reaching
+  // here means DNS and the certificate were created too.
+  tasks.ok('worker', `${workerName} → ${dashboardHostname}`);
 
   // Email Routing. Non-fatal, but mail won't arrive until it's on.
   tasks.run('routing', 'enabling catch-all…');
@@ -486,7 +484,7 @@ async function cmdSetup() {
     worker_name: workerName,
     dashboard_hostname: dashboardHostname,
     admin_email: adminEmail,
-    d1_database_id: d1.id,
+    d1_database_id: d1.uuid,
     r2_raw_bucket: r2Raw.name,
     r2_attachments_bucket: r2Att.name,
     r2_html_bucket: r2Html.name,

@@ -1,6 +1,6 @@
 # MailRiz ✉️🔒
 
-**A disposable email service that runs on your own domain — and your aliases never expire.**
+**A persistent email alias service on your own domain — one inbox for every address, yours forever.**
 
 Stop handing your real address to every newsletter, forum, and signup form. With MailRiz, you invent an alias per service — `netflix@yourdomain.com`, `banks@yourdomain.com`, `whatever@yourdomain.com` — read them all in one inbox, and cut off the one that leaks without touching anything else.
 

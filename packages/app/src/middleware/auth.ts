@@ -110,6 +110,15 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
 
   // Fallback: session cookie (basic login).
   if (e.AUTH_MODE === 'session') {
+    // Without a hash there is no signing key. Falling back to '' would make
+    // the key a string everybody knows, so any forged cookie would verify —
+    // while /api/login kept rejecting passwords, leaving the operator looking
+    // at a normal login screen over an open door. Refuse instead, and say it
+    // is the server's fault so the cause is diagnosable.
+    if (!e.SESSION_PASSWORD_HASH) {
+      return c.json({ error: 'Server misconfigured' }, 500);
+    }
+
     const cookie = c.req.header('Cookie') || '';
     const match = cookie.split(';').map((s) => s.trim()).find((s) => s.startsWith(SESSION_COOKIE + '='));
     if (match) {
@@ -122,8 +131,14 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
       const sig = parts.pop();
       const email = parts.join('.');
       if (email && sig && exp) {
-        const expected = await sha256Hex(`${email}.${exp}.${e.SESSION_PASSWORD_HASH || ''}`);
+        const expected = await sha256Hex(`${email}.${exp}.${e.SESSION_PASSWORD_HASH}`);
         if (sig === expected && Number(exp) * 1000 > Date.now()) {
+          // Same single-user rule the Access path enforces above. login only
+          // ever issues cookies for ADMIN_EMAIL, but verification has to say
+          // so too — otherwise a valid signature over any address is accepted.
+          if (e.ADMIN_EMAIL && email !== e.ADMIN_EMAIL) {
+            return c.json({ error: 'Forbidden' }, 403);
+          }
           c.set('user', { email, mode: 'session' });
           return next();
         }
@@ -133,6 +148,28 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
 
   return c.json({ error: 'Unauthorized' }, 401);
 });
+
+/**
+ * Cookie attributes shared by issuing and clearing the session.
+ *
+ * `Secure` is conditional on purpose: a Secure cookie is not sent over
+ * http://, and `wrangler dev` serves the dashboard on http://localhost:8787 —
+ * so adding it unconditionally would break local login. Do not "tidy" this
+ * into an unconditional flag.
+ *
+ * Clearing has to repeat the same attributes as issuing, or the browser keeps
+ * the cookie it was given.
+ */
+function cookieAttrs(c: any): string {
+  let host = '';
+  try {
+    host = new URL(c.req.url).hostname;
+  } catch {
+    // Unparseable URL: assume production and keep the stricter attribute.
+  }
+  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  return `Path=/; HttpOnly; SameSite=Lax${isLoopback ? '' : '; Secure'}`;
+}
 
 /**
  * Log out of session mode by expiring the cookie.
@@ -146,7 +183,7 @@ export async function logoutHandler(c: any): Promise<Response> {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+      'Set-Cookie': `${SESSION_COOKIE}=; ${cookieAttrs(c)}; Max-Age=0`,
     },
   });
 }
@@ -159,6 +196,11 @@ export async function loginHandler(c: any): Promise<Response> {
   const e = c.env as Env;
   if (e.AUTH_MODE !== 'session') {
     return c.json({ error: 'Session auth not enabled' }, 400);
+  }
+  // Mirror of the guard in jwtAuth: with no hash there is nothing to check a
+  // password against, and issuing a cookie would sign it with an empty key.
+  if (!e.SESSION_PASSWORD_HASH) {
+    return c.json({ error: 'Server misconfigured' }, 500);
   }
   const body = await c.req.json().catch(() => ({}));
   const email = String(body.email || '');
@@ -177,7 +219,7 @@ export async function loginHandler(c: any): Promise<Response> {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`,
+      'Set-Cookie': `${SESSION_COOKIE}=${value}; ${cookieAttrs(c)}; Max-Age=${SESSION_TTL_MS / 1000}`,
     },
   });
 }

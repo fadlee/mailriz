@@ -154,3 +154,80 @@ describe('session cookie validation', () => {
     expect(me.status).toBe(401);
   });
 });
+
+/**
+ * Three findings from the pre-release audit, each reproduced before it was
+ * fixed:
+ *  - an empty SESSION_PASSWORD_HASH made the signing key the empty string, so
+ *    a forged cookie verified while /api/login kept answering 401 — an open
+ *    door behind a normal-looking login screen;
+ *  - the session path never re-checked ADMIN_EMAIL, so a valid signature over
+ *    *any* address was accepted;
+ *  - the cookie went out without Secure.
+ */
+describe('session auth hardening', () => {
+  async function sha256Hex(s: string) {
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** Sign a cookie the way the Worker does, for a given secret. */
+  async function forgeCookie(email: string, secret: string) {
+    const exp = String(Math.floor(Date.now() / 1000) + 86_400);
+    const sig = await sha256Hex(`${email}.${exp}.${secret}`);
+    return `mailriz_session=${encodeURIComponent(`${email}.${sig}.${exp}`)}`;
+  }
+
+  const me = (cookie: string | null, env: any) =>
+    app.fetch(
+      new Request('https://mail.example.com/api/me',
+        cookie ? { headers: { Cookie: cookie } } : undefined),
+      env
+    );
+
+  it('refuses to verify anything when the hash is empty', async () => {
+    const env = makeEnv({ SESSION_PASSWORD_HASH: '' });
+    // Signed with the empty key — this returned 200 before the fix.
+    const res = await me(await forgeCookie('attacker@evil.test', ''), env);
+    expect(res.status).toBe(500);
+  });
+
+  it('refuses to log in when the hash is empty', async () => {
+    const res = await login(
+      { email: 'owner@example.com', password: PASSWORD },
+      makeEnv({ SESSION_PASSWORD_HASH: '' })
+    );
+    expect(res.status).toBe(500);
+  });
+
+  it('leaves access mode alone when the hash is empty', async () => {
+    // The repo's own wrangler.jsonc ships AUTH_MODE=access with an empty hash;
+    // that is normal and must not trip the guard.
+    const res = await me(null, makeEnv({ AUTH_MODE: 'access', SESSION_PASSWORD_HASH: '' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a correctly signed cookie for a different address', async () => {
+    const env = makeEnv();
+    const res = await me(await forgeCookie('someone.else@nowhere.test', PASSWORD_HASH), env);
+    expect(res.status).toBe(403);
+  });
+
+  it('marks the session cookie Secure', async () => {
+    const res = await login({ email: 'owner@example.com', password: PASSWORD });
+    expect(res.headers.get('Set-Cookie') || '').toContain('; Secure');
+  });
+
+  it('omits Secure on loopback, so local dev can still log in', async () => {
+    const res = await app.fetch(
+      new Request('http://localhost:8787/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'owner@example.com', password: PASSWORD }),
+      }),
+      makeEnv()
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie') || '').not.toContain('Secure');
+  });
+});

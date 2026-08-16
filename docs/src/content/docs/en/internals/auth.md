@@ -31,13 +31,27 @@ A password you set during setup. The Worker stores only its SHA-256 hash and
 issues a signed cookie:
 
 ```
-email.signature.expiry     HttpOnly, SameSite=Lax, 30 days
+email.signature.expiry     HttpOnly, Secure, SameSite=Lax, 30 days
 ```
 
 The signature is over the email, the expiry, and the password hash — so
 changing the password invalidates every existing cookie.
 
+`Secure` is omitted only when the request came from `localhost`, since a
+Secure cookie is never sent over `http://` and local development is served
+without TLS.
+
 Signing out expires the cookie.
+
+**`ADMIN_EMAIL` is enforced on both paths.** A cookie is only accepted for that
+address, even though login is the only thing that issues one — a valid
+signature over somebody else's address is refused with 403.
+
+**An empty `SESSION_PASSWORD_HASH` is refused outright.** In session mode the
+hash is the signing key, so an empty one would mean signing with a key everyone
+knows. Rather than fall back to it, the Worker answers 500 on every request,
+including login. If you see that, the deployment has `AUTH_MODE=session` with
+no password configured; re-running `setup` fixes it.
 
 ## Which you will get
 

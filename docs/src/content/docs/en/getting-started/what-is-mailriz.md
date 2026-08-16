@@ -8,6 +8,14 @@ and one inbox to read them all in. It runs entirely on your own Cloudflare
 account: your mail is stored in your D1 database and your R2 buckets, and no
 one else operates any part of it.
 
+![The MailRiz inbox: folders and aliases on the left, the message list in the
+middle, the reading pane on the right](../../../../assets/screenshots/inbox.jpg)
+
+:::note
+Every screenshot on this site uses demo data — invented senders on
+`example.com`. No real mailbox is shown.
+:::
+
 ## The idea
 
 Stop giving your real address to every service. Invent one as you sign up:

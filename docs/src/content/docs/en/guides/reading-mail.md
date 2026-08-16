@@ -6,13 +6,17 @@ description: Messages render as they were sent — and what MailRiz withholds un
 Messages are shown as their sender wrote them: their CSS, their tables, their
 layout. Nothing is stripped for presentation.
 
+![A statement email in the reading pane, with the sender's own colours, table,
+and button intact](../../../../assets/screenshots/reading-a-message.png)
+
 ## Remote images are withheld
 
 A tracking pixel tells the sender that you opened the message, when, and from
 roughly where. So images hosted elsewhere are not loaded. When a message
 references any, a line appears above it:
 
-> ▲ 2 external images are blocked for your privacy. **[Show images]**
+![A newsletter with the blocked-images notice above it; the pictures show as
+empty frames until allowed](../../../../assets/screenshots/blocked-images.png)
 
 Pressing it reloads that message with them allowed. The choice applies to the
 message you are reading, not permanently to the sender.
@@ -49,6 +53,15 @@ The body is served in a sandboxed frame under a strict Content-Security-Policy
 that denies scripts entirely — so rendering a message as-sent does not mean
 running whatever it contains. [Security](/mailriz/en/internals/security/) has
 the detail.
+
+## The message keeps its own background
+
+In dark mode the dashboard goes dark, but the message body does not. The HTML
+inside belongs to the sender and was written against a light background —
+tinting it would break contrast in ways they never tested.
+
+![The dashboard in dark mode, with the message body still on its own light
+background](../../../../assets/screenshots/dark-mode.jpg)
 
 ## Plain-text messages
 

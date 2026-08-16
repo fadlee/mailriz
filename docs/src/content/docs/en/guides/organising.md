@@ -15,6 +15,9 @@ mail — not everyone's. The breadcrumb names both:
 MailRiz / @news · Starred
 ```
 
+![The mailbox scoped to one alias: only that alias's mail is listed, and the
+breadcrumb reads MailRiz / @bank · Inbox](../../../../assets/screenshots/alias-scope.jpg)
+
 **All mail** at the top of the sidebar returns to the unscoped view.
 
 ## The URL follows
@@ -37,6 +40,9 @@ Bookmark `/alias/<id>/inbox` to open straight into one address.
 
 Typing `jan` finds `jane` — you do not have to complete the word. Every term
 must match, each as a prefix, so `jan doe` narrows rather than widens.
+
+![Searching "pine" matches two messages — one whose sender is Pine Press, one
+that only mentions it in the subject](../../../../assets/screenshots/search.jpg)
 
 Search runs over subject, sender, and body text, and is scoped to the mailbox
 and folder you are in.

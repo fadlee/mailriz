@@ -30,6 +30,7 @@ import {
   getAccessOrganization, createAccessApp, createAccessPolicy,
 } from './cf';
 import { applyMigrations } from './migrate';
+import { resolveToken, sourceHint, validateToken, type TokenSources } from './token';
 
 const execFileP = promisify(execFile);
 const CONFIG_DIR = join(homedir(), '.mailriz');
@@ -54,7 +55,37 @@ interface Config {
    *  vars — an empty ACCESS_AUD makes it reject every request. */
   access_aud?: string;
   access_team_domain?: string;
+  /**
+   * Only present when the operator opted in during setup. It carries delete
+   * rights over the Worker, D1 and R2, so it is never stored silently — and
+   * the file is written 0600.
+   */
+  api_token?: string;
   installed_at: string;
+}
+
+/**
+ * Resolve the token for a command that runs against an existing install.
+ *
+ * Order: what was typed, then the saved token, then the environment. An
+ * empty answer is valid whenever one of the fallbacks exists — the prompt
+ * used to advertise "same one you used for setup" while rejecting a blank
+ * line, because nothing was ever saved to reuse.
+ */
+async function promptToken(cfg: Config, purpose: string): Promise<string> {
+  const sources: TokenSources = {
+    stored: cfg.api_token,
+    env: process.env.CLOUDFLARE_API_TOKEN,
+  };
+
+  const answer = (await text({
+    message: `Cloudflare API Token — ${purpose}`,
+    placeholder: sourceHint(sources),
+    validate: (v) => validateToken(v || '', sources),
+  })) as string;
+  if (isCancel(answer)) process.exit(0);
+
+  return resolveToken(answer || '', sources);
 }
 
 function fail(msg: string): never {
@@ -129,6 +160,10 @@ async function deployWithWrangler(opts: {
       directory: './assets',
       binding: 'ASSETS',
       not_found_handling: 'single-page-application',
+      // Without this the SPA fallback answers navigation requests to /api/*
+      // with index.html — an iframe loading a message body got the dashboard
+      // shell instead. Fetches were unaffected, so it only broke the frame.
+      run_worker_first: ['/api/*'],
     },
     triggers: { crons: ['0 4 * * *'] },
     // A Custom Domain, not a route: Cloudflare creates the DNS record and
@@ -553,7 +588,22 @@ async function cmdSetup() {
 
   tasks.stop();
 
+  // Asked explicitly: this token can delete the Worker, the database and every
+  // stored message, so it is never written to disk without a yes.
+  blank();
+  const saveToken = (await confirm({
+    message: 'Save this token so `update` and `destroy` don\'t ask again?',
+    initialValue: false,
+  })) as boolean;
+  if (isCancel(saveToken)) process.exit(0);
+  if (saveToken) {
+    hint(`  Stored in ${CONFIG_PATH} (chmod 600). Delete the file to revoke it locally.`);
+  } else {
+    hint('  Not saved. Later commands read $CLOUDFLARE_API_TOKEN, or ask you to paste it.');
+  }
+
   const cfg: Config = {
+    api_token: saveToken ? effectiveToken : undefined,
     account_id: accountId,
     zone_id: zoneId,
     zone_name: zoneObj.name,
@@ -670,6 +720,8 @@ async function cmdStatus() {
     ['auth', cfg.auth_mode === 'access' ? 'Cloudflare Access' : 'session password'],
     ['worker', cfg.worker_name],
     ['d1', cfg.d1_database_id.slice(0, 8)],
+    // Never the value — just whether a credential is sitting in the file.
+    ['api token', cfg.api_token ? `saved in ${CONFIG_PATH}` : 'not saved'],
     ['installed', new Date(cfg.installed_at).toLocaleString()],
   ]);
   blank();
@@ -712,12 +764,7 @@ async function cmdUpdate() {
   }
   blank();
 
-  const token = (await text({
-    message: 'Cloudflare API Token',
-    placeholder: 'same one you used for setup',
-    validate: (v) => (v?.length > 20 ? undefined : 'Too short'),
-  })) as string;
-  if (isCancel(token)) process.exit(0);
+  const token = await promptToken(cfg, 'to redeploy');
 
   blank();
   const tasks = new TaskList([
@@ -847,11 +894,7 @@ async function cmdDestroy() {
     process.exit(0);
   }
 
-  const token = (await text({
-    message: 'Cloudflare API Token',
-    validate: (v) => (v?.length > 20 ? undefined : 'Too short'),
-  })) as string;
-  if (isCancel(token)) process.exit(0);
+  const token = await promptToken(cfg, 'to delete everything');
 
   blank();
   const del = (url: string) =>

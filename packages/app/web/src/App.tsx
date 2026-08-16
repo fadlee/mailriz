@@ -11,7 +11,7 @@ import {
 } from '@mailriz/shared';
 import { api, ApiError } from './lib/api';
 import { useRoute } from './lib/useRoute';
-import { scopeTo, type Route } from './lib/route';
+import { toScope, toView } from './lib/route';
 import { timeAgo, formatSize, initials, avatarColor } from './lib/format';
 import {
   Inbox, Star, Archive, Trash2, Tag, Plus, Search, Mail, MailOpen,
@@ -153,19 +153,24 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
 
   const activeAlias = aliases.data?.find((a) => a.id === aliasId) || null;
   const activeLabel = labels.data?.find((l) => l.id === labelId) || null;
-  const scope = activeAlias
+  // Mailbox and folder are separate axes now, so name both — "@news · Starred"
+  // rather than just "@news", which gave no clue which folder was open.
+  const folder = VIEWS.find((v) => v.id === view)!.label;
+  const mailbox = activeAlias
     ? `@${activeAlias.local_part}`
     : activeLabel
       ? activeLabel.name
-      : VIEWS.find((v) => v.id === view)!.label;
+      : null;
+  const scope = mailbox ? `${mailbox} · ${folder}` : folder;
 
-  /** Switch folder/alias/label: closes the message and the mobile drawer, and
-   *  clears the search — landing in an apparently empty Trash because a filter
-   *  carried over reads as a bug. */
-  const goScope = (patch: Partial<Route>) => {
-    navigate(scopeTo(patch));
+  /** Switch mailbox — all mail, an alias, or a label. */
+  const goScope = (patch: { aliasId?: string | null; labelId?: string | null }) => {
+    navigate(toScope(patch));
     setNavOpen(false);
   };
+
+  /** Switch folder inside the current mailbox, rather than leaving it. */
+  const goView = (v: EmailView) => navigate(toView(route, v));
 
   const openEmail = (id: string | null) => navigate({ ...route, emailId: id });
 
@@ -191,6 +196,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
         labelId={labelId}
         aliases={aliases.data}
         labels={labels.data}
+        onPickAll={() => goScope({})}
         onPickAlias={(id) => goScope({ aliasId: id })}
         onPickLabel={(id) => goScope({ labelId: id })}
         onNewAlias={() => { setShowNewAlias(true); setNavOpen(false); }}
@@ -225,10 +231,9 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface shadow-[var(--shadow)] lg:flex-row">
             <FolderRail
               view={view}
-              scoped={!!(aliasId || labelId)}
               unread={emails.emails.filter((e) => !e.is_read).length}
               hasMore={!!emails.next}
-              onPick={(v) => goScope({ view: v })}
+              onPick={goView}
             />
 
             {/* List and reading pane only sit side by side from xl up. Below
@@ -431,6 +436,7 @@ function Sidebar(props: {
   view: EmailView;
   aliasId: string | null; labelId: string | null;
   aliases?: Alias[]; labels?: Label[];
+  onPickAll: () => void;
   onPickAlias: (id: string) => void;
   onPickLabel: (id: string) => void;
   onNewAlias: () => void;
@@ -473,6 +479,22 @@ function Sidebar(props: {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
+        {/* The folders now live inside whichever mailbox is selected, so
+            there has to be a way back out of an alias. */}
+        <button
+          onClick={() => props.onPickAll()}
+          className={clsx(
+            navItem,
+            'mt-2',
+            !props.aliasId && !props.labelId
+              ? 'bg-nav-surface font-semibold text-accent-strong'
+              : 'text-text-dim hover:bg-surface-2 hover:text-text'
+          )}
+        >
+          <Inbox size={16} className="shrink-0" />
+          <span className="truncate">All mail</span>
+        </button>
+
         {props.labels && props.labels.length > 0 && (
           <>
             <SectionLabel icon={Tag}>Labels</SectionLabel>
@@ -600,7 +622,6 @@ function Topbar(props: {
 
 function FolderRail(props: {
   view: EmailView;
-  scoped: boolean;
   unread: number;
   hasMore: boolean;
   onPick: (v: EmailView) => void;
@@ -609,7 +630,7 @@ function FolderRail(props: {
     <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-3 lg:w-[196px] lg:flex-col lg:overflow-x-visible lg:overflow-y-auto lg:border-r lg:border-b-0">
       {VIEWS.map((v) => {
         const Icon = v.icon;
-        const active = props.view === v.id && !props.scoped;
+        const active = props.view === v.id;
         return (
           <button
             key={v.id}

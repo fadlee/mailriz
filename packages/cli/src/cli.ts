@@ -205,10 +205,47 @@ async function deployWithWrangler(opts: {
   const env = { ...process.env, CLOUDFLARE_API_TOKEN: opts.token, CLOUDFLARE_ACCOUNT_ID: opts.accountId };
   // Resolve wrangler from our own node_modules (it's a runtime dependency), so
   // the CLI works from any directory — no global install needed.
+  await runWrangler(['deploy'], { cwd: opts.releaseDir, env });
+}
+
+/**
+ * Run wrangler as a child process and wait for it to finish.
+ *
+ * Two details here are load-bearing, and both were learned the hard way.
+ *
+ * **stdout is discarded, not piped and not inherited.** Piping it is what made
+ * `setup` and `update` hang at "worker redeploying…": wrangler can leave a
+ * handle on the stream open after a successful deploy, and anything that waits
+ * for stdio to end — execFile, or spawn with a piped stdout — waits forever
+ * even though the deploy already landed. Inheriting it fixes the hang but
+ * wrecks the display: the task list repaints every 80ms with cursor moves, and
+ * wrangler's own output tears straight through it. Discarding does neither.
+ *
+ * stderr is still captured, so a failure has something to report.
+ */
+function runWrangler(
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin?: string }
+): Promise<void> {
   const require = createRequire(import.meta.url);
-  const wranglerPkgPath = require.resolve('wrangler/package.json');
-  const wranglerBin = join(dirname(wranglerPkgPath), 'bin', 'wrangler.js');
-  await execFileP(process.execPath, [wranglerBin, 'deploy'], { cwd: opts.releaseDir, env });
+  const wranglerBin = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js');
+
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [wranglerBin, ...args], {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr?.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(stderr.trim() || `wrangler ${args.join(' ')} exited ${code}`))
+    );
+    if (opts.stdin !== undefined) child.stdin!.end(opts.stdin);
+  });
 }
 
 /**
@@ -229,26 +266,14 @@ async function putSessionSecrets(opts: {
   passwordHash: string;
   signingKey: string;
 }) {
-  const require = createRequire(import.meta.url);
-  const wranglerBin = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js');
   const env = { ...process.env, CLOUDFLARE_API_TOKEN: opts.token, CLOUDFLARE_ACCOUNT_ID: opts.accountId };
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [wranglerBin, 'secret', 'bulk'], {
-      cwd: opts.releaseDir,
-      env,
-      stdio: ['pipe', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    child.stderr?.on('data', (d) => { stderr += d; });
-    child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error(stderr.trim() || `wrangler secret bulk exited ${code}`))
-    );
-    child.stdin!.end(JSON.stringify({
+  await runWrangler(['secret', 'bulk'], {
+    cwd: opts.releaseDir,
+    env,
+    stdin: JSON.stringify({
       SESSION_PASSWORD_HASH: opts.passwordHash,
       SESSION_SIGNING_KEY: opts.signingKey,
-    }));
+    }),
   });
 }
 

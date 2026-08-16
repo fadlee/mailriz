@@ -12,6 +12,10 @@ export default defineConfig({
   image: { service: passthroughImageService() },
   site: 'https://rizkirmdhnnn.github.io',
   base: '/mailriz',
+  // Every page lives under a locale prefix, so the bare root would 404.
+  // Send it to the default locale. The target needs `base` spelled out —
+  // Astro applies base to the key but writes the value through verbatim.
+  redirects: { '/': '/mailriz/en/' },
   integrations: [
     starlight({
       title: 'MailRiz',

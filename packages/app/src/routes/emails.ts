@@ -96,7 +96,14 @@ emailRoutes.get('/', async (c) => {
   // FTS5 search via MATCH.
   let fromFts = false;
   if (q) {
-    const ftsQuery = q.split(/\s+/).filter(Boolean).map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
+    // Trailing * makes each term a prefix match, so "jan" finds "jane" —
+    // searching used to require whole words, which meant typing a partial
+    // term returned nothing at all.
+    const ftsQuery = q
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((t) => `"${t.replace(/"/g, '""')}"*`)
+      .join(' AND ');
     where.push(`e.id IN (SELECT email_id FROM emails_fts WHERE emails_fts MATCH ?)`);
     params.push(ftsQuery);
   }

@@ -1,0 +1,46 @@
+---
+title: MailRiz
+description: Self-hosted, persistent email aliases running entirely on Cloudflare.
+template: splash
+hero:
+  tagline: Unlimited email addresses on your own domain, one inbox to read them in, running entirely on your own Cloudflare account.
+  actions:
+    - text: Quick start
+      link: /mailriz/en/getting-started/quick-start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/rizkirmdhnnn/mailriz
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Invent addresses as you go" icon="email">
+    Any address on your domain works immediately — type
+    `netflix@yourdomain.com` into a signup form and the alias appears when the
+    first message lands. No need to create it first.
+  </Card>
+  <Card title="Your data stays yours" icon="cloud-download">
+    Raw `.eml` files and attachments are kept in your own R2 buckets, metadata
+    in your own D1 database. There is no MailRiz server.
+  </Card>
+  <Card title="Messages as they were sent" icon="document">
+    Layout and CSS intact, with remote images withheld until you ask — so a
+    tracking pixel never fires just because you opened something.
+  </Card>
+  <Card title="One command to deploy" icon="rocket">
+    `bunx mailriz-cli setup` builds the whole stack: Worker, database, storage,
+    DNS, and mail routing.
+  </Card>
+</CardGrid>
+
+## Start here
+
+- **[What is MailRiz?](/mailriz/en/getting-started/what-is-mailriz/)** — what it
+  does, what it deliberately does not, and what it costs.
+- **[Quick start](/mailriz/en/getting-started/quick-start/)** — one command,
+  about five minutes.
+- **[How a message arrives](/mailriz/en/internals/mail-pipeline/)** — the path
+  from Email Routing to your inbox.

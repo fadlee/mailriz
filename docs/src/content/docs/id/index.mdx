@@ -1,0 +1,49 @@
+---
+title: MailRiz
+description: Alias email permanen, self-hosted, berjalan sepenuhnya di Cloudflare.
+template: splash
+hero:
+  tagline: Alamat email tanpa batas di domain Anda sendiri, satu kotak masuk untuk membacanya, berjalan sepenuhnya di akun Cloudflare Anda.
+  actions:
+    - text: Mulai cepat
+      link: /mailriz/id/getting-started/quick-start/
+      icon: right-arrow
+    - text: Lihat di GitHub
+      link: https://github.com/rizkirmdhnnn/mailriz
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Karang alamatnya sambil jalan" icon="email">
+    Alamat apa pun di domain Anda langsung berfungsi — ketik
+    `netflix@domainanda.com` di formulir pendaftaran, dan aliasnya muncul saat
+    email pertama tiba. Tidak perlu dibuat lebih dulu.
+  </Card>
+  <Card title="Data tetap milik Anda" icon="cloud-download">
+    Berkas `.eml` asli dan lampiran tersimpan di bucket R2 Anda sendiri,
+    metadata di database D1 Anda sendiri. Tidak ada server MailRiz.
+  </Card>
+  <Card title="Email tampil apa adanya" icon="document">
+    Tata letak dan CSS utuh, dengan gambar eksternal ditahan sampai Anda
+    meminta — jadi pelacak tidak menyala hanya karena Anda membuka email.
+  </Card>
+  <Card title="Satu perintah untuk deploy" icon="rocket">
+    `bunx mailriz-cli setup` membangun seluruhnya: Worker, database,
+    penyimpanan, DNS, dan perutean email.
+  </Card>
+</CardGrid>
+
+## Mulai dari sini
+
+- **[Apa itu MailRiz?](/mailriz/id/getting-started/what-is-mailriz/)** — apa
+  yang dilakukannya, apa yang sengaja tidak, dan berapa biayanya.
+- **[Mulai cepat](/mailriz/id/getting-started/quick-start/)** — satu perintah,
+  sekitar lima menit.
+
+:::note
+Sebagian halaman masih berbahasa Inggris. Halaman yang belum diterjemahkan
+akan tampil dalam bahasa Inggris dengan penanda, bukan halaman kosong.
+:::

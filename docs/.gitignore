@@ -1,0 +1,9 @@
+# build output
+dist/
+.astro/
+
+# dependencies
+node_modules/
+
+# pnpm is only used as a local workaround; the repo's lockfile is bun.lock
+pnpm-lock.yaml

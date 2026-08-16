@@ -21,6 +21,33 @@ export default defineConfig({
       title: 'MailRiz',
       description:
         'Self-hosted, persistent email aliases running entirely on Cloudflare.',
+      // Two variants because the bare mark has a white dot and a very pale
+      // top stroke — it disappears on a white header. The tiled version brings
+      // its own dark background, so light mode uses that.
+      logo: {
+        dark: './src/assets/mailriz-mark.svg',
+        light: './src/assets/mailriz-mark-tile.svg',
+        alt: 'MailRiz',
+      },
+      // PNG fallbacks for browsers that ignore SVG favicons, plus the iOS
+      // home-screen icon. The SVG itself is picked up from public/favicon.svg.
+      head: [
+        {
+          tag: 'link',
+          attrs: { rel: 'icon', type: 'image/png', sizes: '32x32',
+                   href: '/mailriz/mailriz-favicon-32.png' },
+        },
+        {
+          tag: 'link',
+          attrs: { rel: 'icon', type: 'image/png', sizes: '16x16',
+                   href: '/mailriz/mailriz-favicon-16.png' },
+        },
+        {
+          tag: 'link',
+          attrs: { rel: 'apple-touch-icon', sizes: '180x180',
+                   href: '/mailriz/mailriz-icon-180.png' },
+        },
+      ],
       social: [
         {
           icon: 'github',

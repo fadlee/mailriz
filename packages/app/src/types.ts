@@ -17,6 +17,10 @@ export interface Env {
    * subdomain the UI is served from and receives no mail.
    */
   MAIL_DOMAIN?: string;
+  /** Live-update stream timings, in ms; see routes/updates.ts. */
+  UPDATES_POLL_MS?: string;
+  UPDATES_PING_MS?: string;
+  UPDATES_CONNECTION_MS?: string;
 }
 
 export interface AuthUser {

@@ -15,6 +15,7 @@ import { toScope, toView } from './lib/route';
 import { Tooltip } from './lib/Tooltip';
 import { Resizer } from './lib/Resizer';
 import { useResizable } from './lib/useResizable';
+import { useLiveMail } from './lib/useLiveMail';
 import { timeAgo, formatSize, initials, avatarColor } from './lib/format';
 import {
   Inbox, Star, Archive, Trash2, Tag, Plus, Search, Mail, MailOpen,
@@ -93,10 +94,21 @@ function useEmails(view: EmailView, aliasId: string | null, labelId: string | nu
     }
   };
 
+  /**
+   * Reload from the first page. New mail sorts to the top, so paging state is
+   * dropped — refetching alone would only refresh whichever page is loaded.
+   */
+  const refreshFromTop = () => {
+    setItems([]);
+    setCursor(null);
+    query.refetch();
+  };
+
   return {
     emails: all,
     next: query.data?.next_cursor || null,
     loadMore,
+    refreshFromTop,
     refetch: query.refetch,
     isLoading: query.isLoading,
     // isFetching, not isLoading: the spinner should turn on every refresh,
@@ -205,8 +217,9 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
   const labels = useLabels();
   const emails = useEmails(view, aliasId, labelId, q);
 
-  // Poll every 25s + on focus.
-  usePolling(emails.refetch, 25_000);
+  // New mail pushes an event; the list then reloads through the normal query,
+  // which already carries the active folder, alias, label and search.
+  const live = useLiveMail(emails.refreshFromTop);
 
   // The refresh button spins for at least this long, so the animation is
   // legible even when the fetch finishes in a few milliseconds.
@@ -300,6 +313,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
           sidebarOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           refreshing={emails.isFetching || refreshSpinning}
+          live={live.connected}
           scope={scope}
           q={q}
           setQ={setQ}
@@ -506,20 +520,6 @@ function LoginScreen({ theme }: { theme: Theme }) {
   );
 }
 
-// ---------------------------------------------------------------- polling
-
-function usePolling(fn: () => void, intervalMs: number) {
-  const [tick, setTick] = useState(0);
-  useQuery({
-    queryKey: ['poll', tick],
-    queryFn: async () => {
-      await new Promise((r) => setTimeout(r, intervalMs));
-      fn();
-      return tick;
-    },
-  });
-}
-
 // ---------------------------------------------------------------- sidebar
 
 function SectionLabel({ icon: Icon, children }: { icon: any; children: React.ReactNode }) {
@@ -693,6 +693,8 @@ function Topbar(props: {
   q: string; setQ: (s: string) => void;
   onRefresh: () => void;
   refreshing: boolean;
+  /** Whether the new-mail stream is currently connected. */
+  live: boolean;
   onMenu: () => void;
   sidebarOpen: boolean; toggleSidebar: () => void;
   dark: boolean; toggleTheme: () => void;
@@ -738,16 +740,34 @@ function Topbar(props: {
           />
         </div>
 
-        <Tooltip label={props.refreshing ? 'Refreshing…' : 'Refresh mail'} side="bottom">
+        <Tooltip
+          label={
+            props.refreshing
+              ? 'Refreshing…'
+              : props.live
+                ? 'Refresh mail · new mail arrives on its own'
+                : 'Refresh mail · live updates disconnected'
+          }
+          side="bottom"
+        >
           <button
             onClick={props.onRefresh}
             disabled={props.refreshing}
             aria-label="Refresh mail"
-            className={ICON_BUTTON}
+            className={clsx(ICON_BUTTON, 'relative')}
           >
             {/* Spins while a fetch is in flight, so pressing it visibly does
                 something even when nothing new arrives. */}
             <RefreshCw size={16} className={clsx(props.refreshing && 'animate-spin')} />
+            {/* Quiet marker: only worth noticing when live updates are off,
+                since that is when the button stops being optional. */}
+            <span
+              aria-hidden
+              className={clsx(
+                'absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-surface transition-colors',
+                props.live ? 'bg-accent' : 'bg-text-faint'
+              )}
+            />
           </button>
         </Tooltip>
 

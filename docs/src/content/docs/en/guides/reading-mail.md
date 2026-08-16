@@ -30,6 +30,10 @@ They also stay in the attachment list, so you can download the original file.
 **SVG is the exception**: it can carry script, so it is always a download and
 never rendered inline.
 
+There are size caps too — roughly 1 MB per image and 5 MB across a message.
+Past those, the picture stays a download rather than being embedded, which
+keeps one enormous message from being expensive to open.
+
 ## Attachments
 
 Listed under the message header with filename and size. Selecting one

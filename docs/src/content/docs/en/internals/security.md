@@ -73,5 +73,6 @@ caught in someone else's burst is delayed rather than lost.
   that account's security as the real perimeter.
 - **Mail in transit** is subject to whatever the sender negotiated. MailRiz
   receives what Cloudflare accepts.
-- **The Access JWT signature is not verified** by the Worker itself. See
-  [Authentication](/mailriz/en/internals/auth/#a-known-limitation).
+- **Access JWTs are signature-verified** by the Worker against the team
+  domain's JWKS, plus audience, issuer, and expiry. See
+  [Authentication](/mailriz/en/internals/auth/#access-jwt-verification).

@@ -1,4 +1,5 @@
 import { createMiddleware } from 'hono/factory';
+import { jwtVerify, createRemoteJWKSet, type JWTPayload } from 'jose';
 import { Env, AppContext, AuthUser } from '../types';
 
 /**
@@ -28,37 +29,67 @@ async function sha256Hex(input: string): Promise<string> {
 
 /**
  * Validate a Cloudflare Access JWT against the team domain's public key
- * (JWKS) and the expected audience. The token is signed by Cloudflare's
- * Access service; we only need the cert chain from the team domain.
+ * (JWKS) and the expected audience.
+ *
+ * The token is signed by Cloudflare's Access service. Its public keys are
+ * served from `https://<team-domain>/cdn-cgi/access/certs`, so we verify the
+ * signature (not just the claims) using jose's remote JWKS — which caches
+ * the key set internally and only refetches when the kid changes.
+ *
+ * Env knobs:
+ *   ACCESS_TEAM_DOMAIN  e.g. "my-team.cloudflareaccess.com" (no scheme)
+ *   ACCESS_CERTS_URL    optional override for the certs endpoint (tests)
  */
-async function validateAccessJwt(token: string, env: Env): Promise<string | null> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
+let jwksCache: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-  let payload: any;
+/** Test hook: drop the cached remote JWKS so a fresh key set is fetched. */
+export function resetJwksCache(): void {
+  jwksCache = null;
+}
+
+/** The certs endpoint itself — already the full path, nothing to append. */
+function certsUrl(env: Env): string {
+  return (
+    env.ACCESS_CERTS_URL || `https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`
+  ).replace(/\/+$/, '');
+}
+
+function getJwks(env: Env) {
+  // The JWKS URL is fixed for a deployment, so build the set once and reuse
+  // it — jose fetches keys lazily and caches them by kid.
+  if (!jwksCache) {
+    jwksCache = createRemoteJWKSet(new URL(certsUrl(env)));
+  }
+  return jwksCache;
+}
+
+async function validateAccessJwt(token: string, env: Env): Promise<string | null> {
+  const aud = env.ACCESS_AUD;
+  const teamDomain = env.ACCESS_TEAM_DOMAIN;
+  // Both are required: without the team domain there is no key set to verify
+  // against, and an install that reaches here with it empty would reject every
+  // request. `mailriz-cli status` reports this so it is diagnosable.
+  if (!aud || !teamDomain) return null;
+
   try {
-    const part1 = parts[1];
-    if (!part1) return null;
-    payload = JSON.parse(atob(part1.replace(/-/g, '+').replace(/_/g, '/')));
+    const { payload } = await jwtVerify(token, getJwks(env), {
+      audience: aud,
+      // Access tokens are issued for the team domain; pin the issuer so a
+      // token minted by some other Access team can't pass.
+      issuer: `https://${teamDomain}`,
+      // Access signs with RS256. Pinning it means a key set that ever offered
+      // something weaker could not be talked into using it.
+      algorithms: ['RS256'],
+    });
+
+    const email = payload.email;
+    if (typeof email !== 'string' || !email.includes('@')) return null;
+
+    return email;
   } catch {
+    // Invalid signature, wrong aud/iss, or expired — all rejected the same.
     return null;
   }
-
-  // Audience check against ACCESS_AUD.
-  const aud = env.ACCESS_AUD;
-  if (!aud) return null;
-  const payloadAud = payload.aud;
-  const auds = Array.isArray(payloadAud) ? payloadAud : payloadAud ? [payloadAud] : [];
-  if (!auds.includes(aud)) return null;
-
-  // Expiry check.
-  if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now()) return null;
-
-  // The email claim is what single-user mode trusts.
-  const email = payload.email;
-  if (typeof email !== 'string' || !email.includes('@')) return null;
-
-  return email;
 }
 
 export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {

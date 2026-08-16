@@ -717,7 +717,17 @@ async function cmdStatus() {
     ['dashboard', `https://${cfg.dashboard_hostname}`],
     ['inbox', `anything@${cfg.zone_name}`],
     ['admin', cfg.admin_email],
-    ['auth', cfg.auth_mode === 'access' ? 'Cloudflare Access' : 'session password'],
+    [
+      'auth',
+      cfg.auth_mode === 'access'
+        ? cfg.access_team_domain
+          ? `Cloudflare Access (${cfg.access_team_domain})`
+          : // The Worker verifies Access JWTs against this domain's keys, so an
+            // empty value rejects every request. Say so here rather than
+            // leaving a locked-out dashboard to be guessed at.
+            'Cloudflare Access — NO TEAM DOMAIN, run `setup` to repair'
+        : 'session password',
+    ],
     ['worker', cfg.worker_name],
     ['d1', cfg.d1_database_id.slice(0, 8)],
     // Never the value — just whether a credential is sitting in the file.

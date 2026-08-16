@@ -7,6 +7,8 @@ export interface Env {
   ADMIN_EMAIL: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
+  /** Optional override for the Access certs endpoint (defaults to https://<team>/cdn-cgi/access/certs). */
+  ACCESS_CERTS_URL?: string;
   TRASH_RETENTION_DAYS?: string;
   AUTH_MODE?: string;
   SESSION_PASSWORD_HASH?: string;

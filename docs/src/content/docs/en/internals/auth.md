@@ -58,14 +58,24 @@ logging out has to work when the cookie is already stale.
 `/healthz` is unauthenticated by design; the setup wizard and uptime checks use
 it, and it reveals nothing but liveness.
 
-## A known limitation
+## Access JWT verification
 
-The Worker's own JWT check decodes the Access token and verifies the audience,
-expiry, and email claim, but **does not verify the signature** against
-Cloudflare's public keys.
+The Worker verifies the Access JWT **signature** against the team domain's
+public keys (JWKS), fetched from `https://<team-domain>/cdn-cgi/access/certs`
+and cached. It also checks the audience, issuer, expiry, and the email claim.
 
-With Access enabled this is defence in depth rather than an open door —
-Cloudflare challenges the request at the edge, so a forged header never reaches
-the Worker through the protected hostname. But it means the Worker's own check
-would not stop a forged token if the Access application were removed or
-misconfigured. Worth knowing if you operate this in access mode.
+This means a forged token is rejected by the Worker itself, even if the Access
+application were removed or misconfigured — the Worker's check does not depend
+on the edge challenge.
+
+Signature verification is done with [`jose`](https://github.com/panva/jose),
+Cloudflare's recommended library. The JWKS is fetched lazily and cached by key
+ID. When a token arrives signed by a key the cache does not hold, the key set
+is refetched — subject to a short cooldown, so a rotation is picked up on its
+own without a redeploy.
+
+The algorithm is pinned to RS256, which is what Access signs with.
+
+If `ACCESS_TEAM_DOMAIN` is empty there is no key set to verify against, and
+every request is rejected. `mailriz-cli status` calls that out explicitly,
+since a dashboard that 401s on everything otherwise gives no clue why.

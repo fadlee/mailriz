@@ -6,10 +6,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "vite build",
+    "build": "bun run --cwd web build",
     "typecheck": "tsc --noEmit -p tsconfig.worker.json && bun run --cwd web typecheck",
     "test": "bun test",
-    "test:ci": "bun test test/sanitize.test.ts && bun test test/email-handler.test.ts && bun test test/auth.test.ts",
     "db:migrate:local": "wrangler d1 migrations apply mailriz --local",
     "db:migrate:remote": "wrangler d1 migrations apply mailriz --remote"
   },
@@ -20,9 +19,7 @@
     "ulid": "^2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.5",
     "@cloudflare/workers-types": "^4",
-    "vite": "^6",
     "wrangler": "^4"
   }
 }

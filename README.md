@@ -1,10 +1,16 @@
-# MailRiz ✉️🔒
+<div align="center">
+
+<img src=".github/assets/mailriz-logo.png" alt="" width="104" height="104">
+
+# MailRiz
 
 **A persistent email alias service on your own domain — one inbox for every address, yours forever.**
 
-Stop handing your real address to every newsletter, forum, and signup form. With MailRiz, you invent an alias per service — `netflix@yourdomain.com`, `banks@yourdomain.com`, `whatever@yourdomain.com` — read them all in one inbox, and cut off the one that leaks without touching anything else.
+[**📖 Documentation**](https://rizkirmdhnnn.github.io/mailriz/) · [Quick start][quickstart] · [How it works][internals]
 
-**📖 Docs: <https://rizkirmdhnnn.github.io/mailriz/>**
+</div>
+
+Stop handing your real address to every newsletter, forum, and signup form. With MailRiz, you invent an alias per service — `netflix@yourdomain.com`, `banks@yourdomain.com`, `whatever@yourdomain.com` — read them all in one inbox, and cut off the one that leaks without touching anything else.
 
 ---
 
@@ -16,7 +22,7 @@ bunx mailriz-cli@latest setup
 
 One command deploys the entire stack to your Cloudflare account: Worker, database, storage, DNS, and email routing. No server to rent, nothing to maintain, no credit card for infrastructure.
 
-> You need a Cloudflare account and a domain already on Cloudflare. The wizard walks you through the API token (7 scopes, ~2 minutes).
+> You need a Cloudflare account and a domain already on Cloudflare. The wizard walks you through the [API token][token] (7 scopes, ~2 minutes).
 
 ---
 

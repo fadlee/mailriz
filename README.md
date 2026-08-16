@@ -8,6 +8,14 @@
 
 [**📖 Documentation**](https://rizkirmdhnnn.github.io/mailriz/) · [Quick start][quickstart] · [How it works][internals]
 
+<!-- GitHub does not render <video> from a repo path, so this is the poster
+     linking to the docs home page, where the clip actually plays. -->
+<a href="https://rizkirmdhnnn.github.io/mailriz/">
+  <img src="docs/public/mailriz-intro-poster.jpg" alt="Watch the 30-second intro" width="640">
+</a>
+
+**▶ [Watch the 30-second intro](https://rizkirmdhnnn.github.io/mailriz/)**
+
 </div>
 
 Stop handing your real address to every newsletter, forum, and signup form. With MailRiz, you invent an alias per service — `netflix@yourdomain.com`, `banks@yourdomain.com`, `whatever@yourdomain.com` — read them all in one inbox, and cut off the one that leaks without touching anything else.

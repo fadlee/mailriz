@@ -19,6 +19,19 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
+{/* preload="none" supaya berkas 7 MB hanya diambil kalau tombol putar
+    ditekan — sampai saat itu posternya yang tampil. */}
+<video
+  controls
+  preload="none"
+  poster="/mailriz/mailriz-intro-poster.jpg"
+  style="width:100%;border-radius:12px;margin:0 0 2.5rem;display:block"
+>
+  <source src="/mailriz/mailriz-intro.mp4" type="video/mp4" />
+  Peramban Anda tidak dapat memutar video ini.
+  <a href="/mailriz/mailriz-intro.mp4">Unduh saja</a>.
+</video>
+
 <CardGrid stagger>
   <Card title="Karang alamatnya sambil jalan" icon="email">
     Alamat apa pun di domain Anda langsung berfungsi — ketik

@@ -19,6 +19,19 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
+{/* preload="none" so the 7 MB file is only fetched if someone presses play —
+    the poster carries the page until then. */}
+<video
+  controls
+  preload="none"
+  poster="/mailriz/mailriz-intro-poster.jpg"
+  style="width:100%;border-radius:12px;margin:0 0 2.5rem;display:block"
+>
+  <source src="/mailriz/mailriz-intro.mp4" type="video/mp4" />
+  Your browser cannot play this video.
+  <a href="/mailriz/mailriz-intro.mp4">Download it instead</a>.
+</video>
+
 <CardGrid stagger>
   <Card title="Invent addresses as you go" icon="email">
     Any address on your domain works immediately — type

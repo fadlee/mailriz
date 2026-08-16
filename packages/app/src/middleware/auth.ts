@@ -1,13 +1,23 @@
 import { createMiddleware } from 'hono/factory';
 import { jwtVerify, createRemoteJWKSet, type JWTPayload } from 'jose';
+import {
+  isSupportedPasswordHash, verifyPassword, signSession, verifySession,
+} from '@mailriz/shared';
 import { Env, AppContext, AuthUser } from '../types';
 
 /**
  * Auth modes:
  * - "access": Cloudflare Access JWT (Cf-Access-Jwt-Assertion) — default.
  * - "session": self-contained session cookie (basic login fallback when the
- *   deployer's token lacks Zero Trust permissions). The password hash is a
- *   SHA-256 hex of the session password, stored as a Worker secret.
+ *   deployer's token lacks Zero Trust permissions).
+ *
+ * Session credentials are two separate Worker secrets:
+ *   SESSION_PASSWORD_HASH  PBKDF2-SHA256, salt and iterations inside the value
+ *   SESSION_SIGNING_KEY    32 random bytes, HMAC key for the cookie
+ *
+ * They are separate on purpose. Signing the cookie with the password hash —
+ * which is what an earlier release did, from a plain Worker var — meant anyone
+ * who could read that value could mint a session without knowing the password.
  */
 
 export type { AuthUser };
@@ -22,9 +32,50 @@ const ACCESS_JWT_HEADER = 'Cf-Access-Jwt-Assertion';
 const SESSION_COOKIE = 'mailriz_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-async function sha256Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+/** Attempts allowed per window. The binding's period is fixed at 10s or 60s. */
+const LOGIN_ATTEMPTS_PER_MINUTE = 5;
+
+/**
+ * Why session mode cannot run, or null if it can.
+ *
+ * Both secrets are required. A missing signing key would mean signing with
+ * `undefined`; a hash in the old bare-SHA-256 format cannot be verified at all
+ * and is a deployment that needs `update`, not a user who typed the wrong
+ * password. All three answer 500 so the cause is diagnosable instead of
+ * looking like a rejected login.
+ */
+function sessionConfigProblem(e: Env): string | null {
+  if (!e.SESSION_PASSWORD_HASH) return 'SESSION_PASSWORD_HASH is empty';
+  if (!e.SESSION_SIGNING_KEY) return 'SESSION_SIGNING_KEY is empty';
+  if (!isSupportedPasswordHash(e.SESSION_PASSWORD_HASH)) {
+    return 'SESSION_PASSWORD_HASH is not a PBKDF2 hash — re-run `mailriz-cli update`';
+  }
+  return null;
+}
+
+let warnedNoLimiter = false;
+
+/**
+ * Rate limit a login attempt. Returns true when the caller may proceed.
+ *
+ * The binding is absent in unit tests and in `wrangler dev`, and login must
+ * still work there — so its absence allows the request rather than blocking
+ * it. That is a real gap if it ever happens in production, hence the warning.
+ */
+async function loginAllowed(c: any, e: Env): Promise<boolean> {
+  const limiter = e.LOGIN_LIMITER;
+  if (!limiter) {
+    if (!warnedNoLimiter) {
+      warnedNoLimiter = true;
+      console.warn('[auth] LOGIN_LIMITER binding missing — login is not rate limited');
+    }
+    return true;
+  }
+  // Per client IP. Cloudflare sets this header; without it every caller shares
+  // one bucket, which is stricter rather than looser.
+  const key = c.req.header('CF-Connecting-IP') || 'unknown';
+  const { success } = await limiter.limit({ key: `login:${key}` });
+  return success;
 }
 
 /**
@@ -110,12 +161,9 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
 
   // Fallback: session cookie (basic login).
   if (e.AUTH_MODE === 'session') {
-    // Without a hash there is no signing key. Falling back to '' would make
-    // the key a string everybody knows, so any forged cookie would verify —
-    // while /api/login kept rejecting passwords, leaving the operator looking
-    // at a normal login screen over an open door. Refuse instead, and say it
-    // is the server's fault so the cause is diagnosable.
-    if (!e.SESSION_PASSWORD_HASH) {
+    const problem = sessionConfigProblem(e);
+    if (problem) {
+      console.warn(`[auth] session mode misconfigured: ${problem}`);
       return c.json({ error: 'Server misconfigured' }, 500);
     }
 
@@ -131,8 +179,8 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
       const sig = parts.pop();
       const email = parts.join('.');
       if (email && sig && exp) {
-        const expected = await sha256Hex(`${email}.${exp}.${e.SESSION_PASSWORD_HASH}`);
-        if (sig === expected && Number(exp) * 1000 > Date.now()) {
+        const ok = await verifySession(`${email}.${exp}`, sig, e.SESSION_SIGNING_KEY!);
+        if (ok && Number(exp) * 1000 > Date.now()) {
           // Same single-user rule the Access path enforces above. login only
           // ever issues cookies for ADMIN_EMAIL, but verification has to say
           // so too — otherwise a valid signature over any address is accepted.
@@ -197,10 +245,15 @@ export async function loginHandler(c: any): Promise<Response> {
   if (e.AUTH_MODE !== 'session') {
     return c.json({ error: 'Session auth not enabled' }, 400);
   }
-  // Mirror of the guard in jwtAuth: with no hash there is nothing to check a
-  // password against, and issuing a cookie would sign it with an empty key.
-  if (!e.SESSION_PASSWORD_HASH) {
+  // Mirror of the guard in jwtAuth.
+  const problem = sessionConfigProblem(e);
+  if (problem) {
+    console.warn(`[auth] session mode misconfigured: ${problem}`);
     return c.json({ error: 'Server misconfigured' }, 500);
+  }
+  // Before reading the body, so a flood costs as little as possible.
+  if (!(await loginAllowed(c, e))) {
+    return c.json({ error: 'Too many attempts' }, 429);
   }
   const body = await c.req.json().catch(() => ({}));
   const email = String(body.email || '');
@@ -208,12 +261,11 @@ export async function loginHandler(c: any): Promise<Response> {
   if (!email || email !== e.ADMIN_EMAIL) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
-  const hash = await sha256Hex(password);
-  if (hash !== e.SESSION_PASSWORD_HASH) {
+  if (!(await verifyPassword(password, e.SESSION_PASSWORD_HASH!))) {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_MS / 1000;
-  const sig = await sha256Hex(`${email}.${exp}.${e.SESSION_PASSWORD_HASH}`);
+  const sig = await signSession(`${email}.${exp}`, e.SESSION_SIGNING_KEY!);
   const value = encodeURIComponent(`${email}.${sig}.${exp}`);
   return new Response(JSON.stringify({ ok: true, email }), {
     status: 200,

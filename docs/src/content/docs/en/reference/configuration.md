@@ -28,11 +28,33 @@ all mail — a missing value must not mean "accept anything".
 | `AUTH_MODE` | `access` or `session` |
 | `ACCESS_TEAM_DOMAIN` | your Zero Trust team domain |
 | `ACCESS_AUD` | the Access application's audience tag |
-| `SESSION_PASSWORD_HASH` | SHA-256 of the dashboard password |
 
 In access mode the Worker rejects every request while `ACCESS_AUD` is empty, so
 it must be set before the deploy that uses it — which is why setup creates the
 Access application first.
+
+### Session secrets
+
+These two are **secrets**, not variables — they are set with
+`wrangler secret bulk` and do not appear in the Worker's plain-text settings.
+
+| Secret | Meaning |
+|---|---|
+| `SESSION_PASSWORD_HASH` | `pbkdf2:<iterations>:<salt>:<hash>` of the dashboard password |
+| `SESSION_SIGNING_KEY` | 32 random bytes; HMAC key for the session cookie |
+
+Both are required in session mode. If either is missing, or the hash is not in
+that format, the Worker answers 500 on every request rather than falling back
+to something weaker. See [Authentication](/mailriz/en/internals/auth/).
+
+### Bindings for auth
+
+| Binding | Purpose |
+|---|---|
+| `LOGIN_LIMITER` | rate limits `POST /api/login` (5 per minute per IP) |
+
+Without the binding, login still works but is not rate limited, and the Worker
+logs a warning once.
 
 ## Retention
 

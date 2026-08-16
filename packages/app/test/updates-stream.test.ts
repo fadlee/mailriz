@@ -12,8 +12,7 @@ import { app } from '../src/api';
  */
 
 const ADMIN = 'owner@example.com';
-// sha256("hunter2")
-const HASH = 'f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7';
+import { TEST_PASSWORD_HASH, TEST_SIGNING_KEY } from './session-credentials';
 
 interface Row {
   id: string;
@@ -32,7 +31,8 @@ function makeEnv(sequence: (Row | null)[]) {
     },
     AUTH_MODE: 'session',
     ADMIN_EMAIL: ADMIN,
-    SESSION_PASSWORD_HASH: HASH,
+    SESSION_PASSWORD_HASH: TEST_PASSWORD_HASH,
+    SESSION_SIGNING_KEY: TEST_SIGNING_KEY,
     // Real timings are seconds and minutes; these keep the suite quick while
     // exercising the same loop.
     UPDATES_POLL_MS: '15',

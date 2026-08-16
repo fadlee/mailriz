@@ -27,31 +27,53 @@ not MailRiz.
 
 ### Session password (`AUTH_MODE=session`)
 
-A password you set during setup. The Worker stores only its SHA-256 hash and
-issues a signed cookie:
+A password you set during setup. The Worker never sees it — only a hash, and a
+separate key it uses to sign the session cookie:
 
 ```
 email.signature.expiry     HttpOnly, Secure, SameSite=Lax, 30 days
 ```
 
-The signature is over the email, the expiry, and the password hash — so
-changing the password invalidates every existing cookie.
+Both are Worker **secrets**, not variables, so neither shows up in the
+Cloudflare dashboard's plain-text settings.
 
-`Secure` is omitted only when the request came from `localhost`, since a
-Secure cookie is never sent over `http://` and local development is served
-without TLS.
+**The password** is stored as PBKDF2-HMAC-SHA256 with a random salt:
+
+```
+pbkdf2:100000:<salt>:<hash>
+```
+
+The work factor lives inside the value, so it can be raised later without
+invalidating passwords already stored.
+
+**The cookie is signed with `SESSION_SIGNING_KEY`** — 32 random bytes, HMAC
+-SHA256, generated at setup and unrelated to the password. That separation is
+the point: an earlier release signed with the password hash itself, which meant
+anyone who could read that value could mint a session without ever knowing the
+password. Rotating the signing key ends every session; changing the password
+does not, by itself.
+
+Signature comparison is constant-time.
+
+`Secure` is omitted only when the request came from `localhost`, since a Secure
+cookie is never sent over `http://` and local development is served without TLS.
 
 Signing out expires the cookie.
+
+**Login is rate limited** to a handful of attempts per minute per IP, through
+Cloudflare's rate-limiting binding. Online guessing goes from as fast as the
+Worker answers to something a password can outlast.
 
 **`ADMIN_EMAIL` is enforced on both paths.** A cookie is only accepted for that
 address, even though login is the only thing that issues one — a valid
 signature over somebody else's address is refused with 403.
 
-**An empty `SESSION_PASSWORD_HASH` is refused outright.** In session mode the
-hash is the signing key, so an empty one would mean signing with a key everyone
-knows. Rather than fall back to it, the Worker answers 500 on every request,
-including login. If you see that, the deployment has `AUTH_MODE=session` with
-no password configured; re-running `setup` fixes it.
+**A missing or unreadable credential is refused outright.** If either secret is
+empty, or the stored hash is not in the format above, the Worker answers 500 on
+every request including login — rather than falling back to a key everybody
+knows. A deployment from before this scheme carries a bare SHA-256 and lands
+exactly here; `mailriz-cli update` asks for the password once more and fixes
+it.
 
 ## Which you will get
 

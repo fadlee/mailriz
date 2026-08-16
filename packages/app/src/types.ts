@@ -11,7 +11,17 @@ export interface Env {
   ACCESS_CERTS_URL?: string;
   TRASH_RETENTION_DAYS?: string;
   AUTH_MODE?: string;
+  /**
+   * Session credentials, both Worker **secrets** rather than vars.
+   *
+   * SESSION_PASSWORD_HASH is `pbkdf2:<iterations>:<salt>:<hash>`; the signing
+   * key is separate so that reading the hash does not let anyone mint a
+   * session. See packages/shared/src/credentials.ts.
+   */
   SESSION_PASSWORD_HASH?: string;
+  SESSION_SIGNING_KEY?: string;
+  /** Workers Rate Limiting binding guarding POST /api/login. */
+  LOGIN_LIMITER?: { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
   DASHBOARD_HOSTNAME?: string;
   /**
    * The domain mail actually arrives on — the zone apex that Email Routing's

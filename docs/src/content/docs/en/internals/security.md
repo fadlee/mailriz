@@ -58,10 +58,12 @@ caught in someone else's burst is delayed rather than lost.
 
 ## Secrets
 
-- The session password is stored only as a SHA-256 hash — the plaintext never
-  leaves your machine. Note it is written as a Worker **variable**, not a
-  secret, so anyone who can read the Worker's settings in the Cloudflare
-  dashboard can read the hash.
+- The session password is stored only as a salted PBKDF2 hash — the plaintext
+  never leaves your machine. It and the cookie signing key are Worker
+  **secrets**, so neither appears in the Worker's plain-text settings.
+- The two are separate values on purpose. Signing the cookie with the password
+  hash, as an earlier release did, meant that reading the hash was enough to
+  mint a session.
 - The Cloudflare API token is **not** saved unless you opt in during setup;
   when saved it goes to `~/.mailriz/config.json` with mode `600`.
 - `mailriz-cli status` reports whether a token is on disk, never its value.

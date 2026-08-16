@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import {
@@ -31,6 +31,7 @@ import {
 } from './cf';
 import { applyMigrations } from './migrate';
 import { resolveToken, sourceHint, validateToken, type TokenSources } from './token';
+import { hashPassword, generateSigningKey } from '@mailriz/shared';
 
 const execFileP = promisify(execFile);
 const CONFIG_DIR = join(homedir(), '.mailriz');
@@ -50,7 +51,6 @@ interface Config {
   r2_attachments_bucket: string;
   r2_html_bucket: string;
   auth_mode: 'access' | 'session';
-  session_password_hash?: string;
   /** Persisted so `update` can redeploy without blanking the Worker's Access
    *  vars — an empty ACCESS_AUD makes it reject every request. */
   access_aud?: string;
@@ -144,7 +144,6 @@ async function deployWithWrangler(opts: {
   /** Zone apex — where mail arrives. Not the dashboard hostname. */
   mailDomain: string;
   authMode: 'access' | 'session';
-  sessionHash?: string;
   accessAud?: string;
   accessTeamDomain?: string;
 }) {
@@ -178,10 +177,18 @@ async function deployWithWrangler(opts: {
       ACCESS_AUD: opts.accessAud || '',
       TRASH_RETENTION_DAYS: '30',
       AUTH_MODE: opts.authMode,
-      SESSION_PASSWORD_HASH: opts.sessionHash || '',
+      // SESSION_PASSWORD_HASH and SESSION_SIGNING_KEY are deliberately absent:
+      // they go up as secrets via putSessionSecrets(). vars and secrets share
+      // the same env namespace, so declaring them here — even as '' — would
+      // overwrite the secrets on every deploy.
       DASHBOARD_HOSTNAME: opts.dashboardHostname,
       MAIL_DOMAIN: opts.mailDomain,
     },
+    // Slows online password guessing from "as fast as the Worker answers" to
+    // a handful a minute. period only accepts 10 or 60.
+    ratelimits: [
+      { name: 'LOGIN_LIMITER', namespace_id: '1001', simple: { limit: 5, period: 60 } },
+    ],
     d1_databases: [
       { binding: 'DB', database_name: 'mailriz', database_id: opts.d1Id, migrations_dir: 'migrations' },
     ],
@@ -199,6 +206,47 @@ async function deployWithWrangler(opts: {
   const wranglerPkgPath = require.resolve('wrangler/package.json');
   const wranglerBin = join(dirname(wranglerPkgPath), 'bin', 'wrangler.js');
   await execFileP(process.execPath, [wranglerBin, 'deploy'], { cwd: opts.releaseDir, env });
+}
+
+/**
+ * Push the session secrets to the deployed Worker.
+ *
+ * Through stdin, not a file: `wrangler secret bulk` accepts either, and a file
+ * would leave the password hash and signing key sitting in ~/.mailriz/.temp,
+ * which is never cleaned up.
+ *
+ * Has to run *after* deploy — a Worker must exist before secrets can be
+ * attached to it. Between the two the Worker answers 500, by design, which is
+ * why the health probe comes last.
+ */
+async function putSessionSecrets(opts: {
+  token: string;
+  accountId: string;
+  releaseDir: string;
+  passwordHash: string;
+  signingKey: string;
+}) {
+  const require = createRequire(import.meta.url);
+  const wranglerBin = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js');
+  const env = { ...process.env, CLOUDFLARE_API_TOKEN: opts.token, CLOUDFLARE_ACCOUNT_ID: opts.accountId };
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [wranglerBin, 'secret', 'bulk'], {
+      cwd: opts.releaseDir,
+      env,
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr?.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(stderr.trim() || `wrangler secret bulk exited ${code}`))
+    );
+    child.stdin!.end(JSON.stringify({
+      SESSION_PASSWORD_HASH: opts.passwordHash,
+      SESSION_SIGNING_KEY: opts.signingKey,
+    }));
+  });
 }
 
 // ---------------------------------------------------------------- setup
@@ -381,16 +429,20 @@ async function cmdSetup() {
 
   let authMode: 'access' | 'session' = 'access';
   let sessionHash: string | undefined;
+  let signingKey: string | undefined;
   if (!useAccess) {
     const pw = (await text({
       message: accessAvailable
         ? 'Set a dashboard password'
         : 'Set a dashboard password (Access unavailable)',
-      placeholder: 'min 8 chars',
-      validate: (v) => (v && v.length >= 8 ? undefined : 'min 8 chars'),
+      placeholder: 'min 12 chars',
+      validate: (v) => (v && v.length >= 12 ? undefined : 'min 12 chars'),
     })) as string;
     if (isCancel(pw)) process.exit(0);
-    sessionHash = await sha256(pw);
+    // PBKDF2 with a per-password salt, and a signing key that has nothing to
+    // do with the password — reading one must not yield the other.
+    sessionHash = await hashPassword(pw);
+    signingKey = generateSigningKey();
     authMode = 'session';
   }
 
@@ -547,10 +599,21 @@ async function cmdSetup() {
       dashboardHostname,
       mailDomain: zoneObj.name,
       authMode,
-      sessionHash,
       accessAud,
       accessTeamDomain: teamDomain,
     });
+    // Secrets can only be attached once the Worker exists, so this follows the
+    // deploy. Until it lands the Worker answers 500 in session mode; the health
+    // probe below runs after, so it sees the finished state.
+    if (authMode === 'session') {
+      await putSessionSecrets({
+        token: effectiveToken,
+        accountId,
+        releaseDir: release.dir,
+        passwordHash: sessionHash!,
+        signingKey: signingKey!,
+      });
+    }
   } catch (e: any) {
     tasks.failTask('worker', e.message);
     abort(
@@ -615,7 +678,6 @@ async function cmdSetup() {
     r2_attachments_bucket: r2Att.name,
     r2_html_bucket: r2Html.name,
     auth_mode: authMode,
-    session_password_hash: sessionHash,
     access_aud: accessAud || undefined,
     access_team_domain: teamDomain || undefined,
     installed_at: new Date().toISOString(),
@@ -776,6 +838,27 @@ async function cmdUpdate() {
 
   const token = await promptToken(cfg, 'to redeploy');
 
+  // Session credentials changed shape: the password is now PBKDF2 with a salt,
+  // and the cookie is signed with a key of its own. Neither can be derived
+  // from the old bare SHA-256 — that is the point of a password hash — so the
+  // only way forward is to set the password once more.
+  let newHash: string | undefined;
+  let newSigningKey: string | undefined;
+  if (cfg.auth_mode === 'session') {
+    blank();
+    hint('Session credentials are being upgraded (salted hash + separate cookie key).');
+    hint('The old password cannot be carried over, so set it again — existing');
+    hint('sessions will end and you will log in once more.');
+    const pw = (await text({
+      message: 'Dashboard password',
+      placeholder: 'min 12 chars',
+      validate: (v) => (v && v.length >= 12 ? undefined : 'min 12 chars'),
+    })) as string;
+    if (isCancel(pw)) process.exit(0);
+    newHash = await hashPassword(pw);
+    newSigningKey = generateSigningKey();
+  }
+
   blank();
   const tasks = new TaskList([
     { key: 'release', label: 'release' },
@@ -830,10 +913,18 @@ async function cmdUpdate() {
       dashboardHostname: cfg.dashboard_hostname,
       mailDomain: cfg.zone_name,
       authMode: cfg.auth_mode,
-      sessionHash: cfg.session_password_hash,
       accessAud: cfg.access_aud,
       accessTeamDomain: cfg.access_team_domain,
     });
+    if (cfg.auth_mode === 'session') {
+      await putSessionSecrets({
+        token,
+        accountId: cfg.account_id,
+        releaseDir: release.dir,
+        passwordHash: newHash!,
+        signingKey: newSigningKey!,
+      });
+    }
   } catch (e: any) {
     tasks.failTask('worker', e.message);
     abort(`Update failed: ${e.message}`);

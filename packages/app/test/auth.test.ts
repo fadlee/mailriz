@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test';
+import { signSession, hashPassword, verifyPassword } from '@mailriz/shared';
 import { app } from '../src/api';
 
 /**
@@ -11,15 +12,16 @@ import { app } from '../src/api';
  *    address containing a dot, which is nearly all of them.
  */
 
-// sha256("hunter2")
-const PASSWORD = 'hunter2';
-const PASSWORD_HASH = 'f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7';
+import { TEST_PASSWORD, TEST_PASSWORD_HASH, TEST_SIGNING_KEY } from './session-credentials';
+
+const PASSWORD = TEST_PASSWORD;
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
   return {
     AUTH_MODE: 'session',
     ADMIN_EMAIL: 'owner@example.com',
-    SESSION_PASSWORD_HASH: PASSWORD_HASH,
+    SESSION_PASSWORD_HASH: TEST_PASSWORD_HASH,
+    SESSION_SIGNING_KEY: TEST_SIGNING_KEY,
     ACCESS_TEAM_DOMAIN: '',
     ACCESS_AUD: '',
     TRASH_RETENTION_DAYS: '30',
@@ -113,11 +115,13 @@ describe('session cookie validation', () => {
     expect(await readJson(res)).toMatchObject({ email: 'first.last@mail.example.co.uk' });
   });
 
-  it('rejects a cookie signed with a different password', async () => {
+  it('rejects a cookie signed with a different signing key', async () => {
     const issuing = makeEnv();
     const res = await login({ email: 'owner@example.com', password: PASSWORD }, issuing);
 
-    const rotated = makeEnv({ SESSION_PASSWORD_HASH: 'a'.repeat(64) });
+    // The cookie key is no longer the password hash, so rotating the key is
+    // what invalidates sessions — this is the separation A-02 introduced.
+    const rotated = makeEnv({ SESSION_SIGNING_KEY: 'b'.repeat(64) });
     const me = await app.fetch(
       new Request('https://mail.example.com/api/me', {
         headers: { Cookie: cookieFrom(res) },
@@ -166,15 +170,10 @@ describe('session cookie validation', () => {
  *  - the cookie went out without Secure.
  */
 describe('session auth hardening', () => {
-  async function sha256Hex(s: string) {
-    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-    return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
-  }
-
-  /** Sign a cookie the way the Worker does, for a given secret. */
-  async function forgeCookie(email: string, secret: string) {
+  /** Sign a cookie the way the Worker does, under a given signing key. */
+  async function forgeCookie(email: string, signingKey: string) {
     const exp = String(Math.floor(Date.now() / 1000) + 86_400);
-    const sig = await sha256Hex(`${email}.${exp}.${secret}`);
+    const sig = await signSession(`${email}.${exp}`, signingKey);
     return `mailriz_session=${encodeURIComponent(`${email}.${sig}.${exp}`)}`;
   }
 
@@ -187,8 +186,10 @@ describe('session auth hardening', () => {
 
   it('refuses to verify anything when the hash is empty', async () => {
     const env = makeEnv({ SESSION_PASSWORD_HASH: '' });
-    // Signed with the empty key — this returned 200 before the fix.
-    const res = await me(await forgeCookie('attacker@evil.test', ''), env);
+    // Any cookie at all: the point is that the request is refused before the
+    // signature is even considered. Under the old scheme an empty hash made
+    // the signing key the empty string, and a forgery verified.
+    const res = await me(await forgeCookie('attacker@evil.test', TEST_SIGNING_KEY), env);
     expect(res.status).toBe(500);
   });
 
@@ -209,7 +210,7 @@ describe('session auth hardening', () => {
 
   it('rejects a correctly signed cookie for a different address', async () => {
     const env = makeEnv();
-    const res = await me(await forgeCookie('someone.else@nowhere.test', PASSWORD_HASH), env);
+    const res = await me(await forgeCookie('someone.else@nowhere.test', TEST_SIGNING_KEY), env);
     expect(res.status).toBe(403);
   });
 
@@ -229,5 +230,83 @@ describe('session auth hardening', () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get('Set-Cookie') || '').not.toContain('Secure');
+  });
+});
+
+/**
+ * A-02: the credential scheme itself.
+ *
+ * Before this, the password was a single unsalted SHA-256 and that same hash
+ * was the cookie signing key — so reading it (it was a plain Worker var) was
+ * enough to mint a session without ever knowing the password.
+ */
+describe('session credential scheme', () => {
+  const me = (cookie: string, env: any) =>
+    app.fetch(new Request('https://mail.example.com/api/me', { headers: { Cookie: cookie } }), env);
+
+  it('accepts the right password against a PBKDF2 hash', async () => {
+    const res = await login({ email: 'owner@example.com', password: PASSWORD });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie') || '').toContain('mailriz_session=');
+  });
+
+  it('rejects the wrong password', async () => {
+    const res = await login({ email: 'owner@example.com', password: 'not-it' });
+    expect(res.status).toBe(401);
+  });
+
+  it('reads iterations and salt from the stored hash, not from a constant', async () => {
+    // A different work factor than the shared fixture uses. If verification
+    // ignored the stored parameters this would not match.
+    const hash = await hashPassword(PASSWORD, 2_500);
+    const env = makeEnv({ SESSION_PASSWORD_HASH: hash });
+    expect((await login({ email: 'owner@example.com', password: PASSWORD }, env)).status).toBe(200);
+    expect((await login({ email: 'owner@example.com', password: 'wrong' }, env)).status).toBe(401);
+  });
+
+  it('salts, so the same password hashes differently every time', async () => {
+    const a = await hashPassword(PASSWORD, 1_000);
+    const b = await hashPassword(PASSWORD, 1_000);
+    expect(a).not.toBe(b);
+    expect(await verifyPassword(PASSWORD, a)).toBe(true);
+    expect(await verifyPassword(PASSWORD, b)).toBe(true);
+  });
+
+  it('refuses a deployment still carrying a bare SHA-256 hash', async () => {
+    // What every install before this release has. It cannot be verified, and
+    // saying so beats letting it look like a wrong password forever.
+    const legacy = 'f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7';
+    const env = makeEnv({ SESSION_PASSWORD_HASH: legacy });
+    expect((await login({ email: 'owner@example.com', password: PASSWORD }, env)).status).toBe(500);
+    expect((await me('mailriz_session=x.y.z', env)).status).toBe(500);
+  });
+
+  it('refuses when the signing key is missing', async () => {
+    const env = makeEnv({ SESSION_SIGNING_KEY: '' });
+    expect((await login({ email: 'owner@example.com', password: PASSWORD }, env)).status).toBe(500);
+  });
+
+  it('does not let the password hash act as the signing key', async () => {
+    // The old scheme's forgery: sign with what is stored in the hash field.
+    const env = makeEnv();
+    const exp = String(Math.floor(Date.now() / 1000) + 86_400);
+    const sig = await signSession(`owner@example.com.${exp}`, TEST_PASSWORD_HASH);
+    const cookie = `mailriz_session=${encodeURIComponent(`owner@example.com.${sig}.${exp}`)}`;
+    expect((await me(cookie, env)).status).toBe(401);
+  });
+
+  it('rate limits login when the binding is present', async () => {
+    let calls = 0;
+    const env = makeEnv({
+      LOGIN_LIMITER: { limit: async () => ({ success: ++calls <= 2 }) },
+    });
+    expect((await login({ email: 'owner@example.com', password: 'wrong' }, env)).status).toBe(401);
+    expect((await login({ email: 'owner@example.com', password: 'wrong' }, env)).status).toBe(401);
+    expect((await login({ email: 'owner@example.com', password: PASSWORD }, env)).status).toBe(429);
+  });
+
+  it('still logs in when the limiter binding is absent', async () => {
+    // No binding in unit tests or wrangler dev; login must not die there.
+    expect((await login({ email: 'owner@example.com', password: PASSWORD })).status).toBe(200);
   });
 });

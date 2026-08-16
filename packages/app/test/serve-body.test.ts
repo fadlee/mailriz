@@ -19,8 +19,7 @@ import { app } from '../src/api';
  */
 
 const ADMIN = 'owner@example.com';
-// sha256("hunter2")
-const HASH = 'f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7';
+import { TEST_PASSWORD_HASH, TEST_SIGNING_KEY } from './session-credentials';
 
 const PNG = 'image/png';
 /** 1x1 transparent PNG. */
@@ -41,7 +40,8 @@ function makeEnv(html: string, attachments: Att[] = []) {
   return {
     AUTH_MODE: 'session',
     ADMIN_EMAIL: ADMIN,
-    SESSION_PASSWORD_HASH: HASH,
+    SESSION_PASSWORD_HASH: TEST_PASSWORD_HASH,
+    SESSION_SIGNING_KEY: TEST_SIGNING_KEY,
     HTML_BUCKET: {
       async get() {
         return { async text() { return html; }, body: null };

@@ -121,3 +121,9 @@ export function makeSnippet(bodyText: string, length = SNIPPET_LENGTH): string {
   if (collapsed.length <= length) return collapsed;
   return collapsed.slice(0, length).trimEnd() + '…';
 }
+
+/**
+ * Session credential format. Re-exported so the Worker and the CLI import the
+ * same implementation — if these two ever diverge, the owner is locked out.
+ */
+export * from './credentials';

@@ -377,6 +377,41 @@ const INLINEABLE = new Set([
 const MAX_INLINE_BYTES = 1_000_000;
 const MAX_INLINE_TOTAL = 5_000_000;
 
+/**
+ * An opening `<a …>` tag. Quoted attribute values are matched as units so an
+ * `>` inside one — `title="a>b"` — does not end the match early and shear the
+ * tag in half.
+ */
+const ANCHOR_TAG = /<a\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+
+/** `target=…` / `rel=…` in any quoting style, so they can be replaced. */
+const TARGET_ATTR = /\starget\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+const REL_ATTR = /\srel\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+
+/** An http(s) href, quoted or bare. Anything else is left alone. */
+const HTTP_HREF = /\bhref\s*=\s*(?:"\s*https?:|'\s*https?:|https?:)/i;
+
+/**
+ * Point every http(s) link at a new tab.
+ *
+ * The body is sandboxed, so it cannot navigate its own frame — without this a
+ * link simply does nothing when clicked, which reads as a broken inbox.
+ *
+ * `target` and `rel` are **replaced, not preserved**. A message is
+ * attacker-controlled: one carrying `rel="opener"` (or even an innocent
+ * `rel="nofollow"`, which would just as effectively displace ours) would hand
+ * the opened page a handle on the frame it came from, and that page could
+ * navigate the message pane to somewhere of its choosing. Whatever the sender
+ * wanted from those two attributes matters less than that.
+ */
+export function openLinksInNewTab(html: string): string {
+  return html.replace(ANCHOR_TAG, (whole, attrs: string) => {
+    if (!HTTP_HREF.test(attrs)) return whole;
+    const cleaned = attrs.replace(TARGET_ATTR, '').replace(REL_ATTR, '');
+    return `<a${cleaned} target="_blank" rel="noopener noreferrer">`;
+  });
+}
+
 function toBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let binary = '';
@@ -419,6 +454,8 @@ emailRoutes.get('/:id/html', async (c) => {
   // Bodies stored by older releases had their image sources rewritten. Put
   // them back so those messages still show pictures when asked.
   if (showRemote) html = html.replace(/data-blocked-src=/gi, 'src=');
+
+  html = openLinksInNewTab(html);
 
   const cidRefs = /src\s*=\s*(?:"cid:([^"]+)"|'cid:([^']+)'|cid:([^\s>]+))/gi;
   if (cidRefs.test(html)) {
@@ -463,7 +500,17 @@ emailRoutes.get('/:id/html', async (c) => {
         "style-src 'unsafe-inline'",
         imgSrc,
         'font-src data:',
-        'sandbox',
+        // Both tokens are needed for a link to work, and both have to appear
+        // *here* as well as on the iframe: the two sandboxes intersect, so a
+        // bare `sandbox` in this header keeps popups blocked no matter what
+        // the iframe grants. Verified in a browser — granting it only on the
+        // iframe changes nothing.
+        //
+        // Scripts stay denied, so nothing can open a window on its own; the
+        // only route is a click the reader made. escape-sandbox applies to the
+        // new tab, which has to be an ordinary page or the destination site
+        // would be crippled.
+        'sandbox allow-popups allow-popups-to-escape-sandbox',
       ].join('; '),
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',

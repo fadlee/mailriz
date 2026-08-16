@@ -99,6 +99,11 @@ function csp(res: Response): string {
   return res.headers.get('Content-Security-Policy') || '';
 }
 
+/** Serve one body and return its text. */
+async function bodyText(html: string): Promise<string> {
+  return (await get(makeEnv(html))).text();
+}
+
 describe('response headers', () => {
   it('sandboxes the document and denies everything by default', async () => {
     const policy = csp(await get(makeEnv('<p>hi</p>')));
@@ -218,5 +223,68 @@ describe('bodies stored by older releases', () => {
   it('leaves them rewritten while images are still blocked', async () => {
     const html = '<img data-blocked-src="https://cdn.example/logo.png">';
     expect(await (await get(makeEnv(html))).text()).toContain('data-blocked-src');
+  });
+});
+
+/**
+ * Links in a message body.
+ *
+ * A sandboxed document cannot navigate its own frame, so without help every
+ * link in every email silently does nothing. Rewriting them to a new tab needs
+ * three things to line up, and an earlier attempt only did one of them:
+ *
+ *  - the iframe must grant allow-popups (App.tsx),
+ *  - the response CSP must grant it too — the browser intersects the two, so a
+ *    bare `sandbox` here blocks popups no matter what the iframe says,
+ *  - target/rel must be *replaced*, since the sender controls them.
+ */
+describe('links open in a new tab', () => {
+  it('grants popups in the CSP, not just on the iframe', async () => {
+    const res = await get(makeEnv('<a href="https://example.com/">x</a>'));
+    const policy = csp(res);
+    expect(policy).toContain('allow-popups');
+    expect(policy).toContain('allow-popups-to-escape-sandbox');
+    // Scripts stay denied — popups are reachable only by a real click.
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).not.toContain('allow-scripts');
+  });
+
+  it('adds target and rel to a plain link', async () => {
+    const html = await bodyText('<a href="https://example.com/">x</a>');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('overrides a rel the sender chose', async () => {
+    // rel="opener" would hand the opened page a handle on this frame; even
+    // rel="nofollow" would displace ours if we only appended when absent.
+    for (const rel of ['opener', 'nofollow']) {
+      const html = await bodyText(`<a href="https://evil.test/" rel="${rel}">x</a>`);
+      expect(html).toContain('rel="noopener noreferrer"');
+      expect(html).not.toContain(`rel="${rel}"`);
+    }
+  });
+
+  it('overrides a target the sender chose', async () => {
+    // _self would keep the link dead, since the frame cannot navigate itself.
+    const html = await bodyText('<a href="https://evil.test/" target="_self">x</a>');
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain('target="_self"');
+  });
+
+  it('survives a > inside an attribute value', async () => {
+    const html = await bodyText('<a href="https://example.com/" title="a>b">x</a>');
+    // The whole tag must stay intact — a naive regex ends the match at the
+    // first > and leaves `b">` leaking into the page as text.
+    expect(html).toContain('title="a>b"');
+    expect(html).not.toContain('b">x');
+    expect(html).toContain('target="_blank"');
+  });
+
+  it('leaves non-http links alone', async () => {
+    for (const href of ['mailto:someone@example.com', '#anchor', '/relative']) {
+      const html = await bodyText(`<a href="${href}">x</a>`);
+      expect(html).not.toContain('target="_blank"');
+    }
   });
 });

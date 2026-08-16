@@ -1056,13 +1056,19 @@ function ReadingPane({ emailId, onBack }: { emailId: string; onBack: () => void 
                 </button>
               </div>
             )}
-            {/* An empty sandbox is the point: no allow-same-origin, so the
-                message can never reach the dashboard's origin. */}
+            {/* No allow-same-origin and no allow-scripts: the message can
+                never reach the dashboard's origin, and nothing in it runs.
+                allow-popups only lets a link the reader clicked open a tab —
+                without it a sandboxed document cannot navigate anywhere at
+                all, and every link in every email is dead.
+
+                The response carries the same two tokens in its CSP. Both are
+                required; the browser intersects them. */}
             <iframe
               key={iframeKey}
               src={`/api/emails/${emailId}/html${showImages ? '?images=1' : ''}`}
               className="email-frame"
-              sandbox=""
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
               title="Email body"
             />
           </>

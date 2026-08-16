@@ -12,11 +12,14 @@ import {
 import { api, ApiError } from './lib/api';
 import { useRoute } from './lib/useRoute';
 import { toScope, toView } from './lib/route';
+import { Tooltip } from './lib/Tooltip';
+import { Resizer } from './lib/Resizer';
+import { useResizable } from './lib/useResizable';
 import { timeAgo, formatSize, initials, avatarColor } from './lib/format';
 import {
   Inbox, Star, Archive, Trash2, Tag, Plus, Search, Mail, MailOpen,
   RefreshCw, Paperclip, X, Check, FileText, ChevronLeft, Menu,
-  Sun, Moon, AlertTriangle,
+  Sun, Moon, AlertTriangle, LogOut, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------- helpers
@@ -90,7 +93,37 @@ function useEmails(view: EmailView, aliasId: string | null, labelId: string | nu
     }
   };
 
-  return { emails: all, next: query.data?.next_cursor || null, loadMore, refetch: query.refetch, isLoading: query.isLoading };
+  return {
+    emails: all,
+    next: query.data?.next_cursor || null,
+    loadMore,
+    refetch: query.refetch,
+    isLoading: query.isLoading,
+    // isFetching, not isLoading: the spinner should turn on every refresh,
+    // not only the first load.
+    isFetching: query.isFetching,
+  };
+}
+
+/** A boolean that outlives the tab — sidebar open, and the like. */
+function useStoredFlag(key: string, fallback: boolean): [boolean, (v: boolean) => void] {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved === null ? fallback : saved === '1';
+    } catch {
+      return fallback;
+    }
+  });
+  return [
+    value,
+    (next: boolean) => {
+      setValue(next);
+      try {
+        localStorage.setItem(key, next ? '1' : '0');
+      } catch {}
+    },
+  ];
 }
 
 /** Light by default; the choice is mirrored onto <html data-theme> and stored.
@@ -142,6 +175,11 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
   const [showNewAlias, setShowNewAlias] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
 
+  // Layout choices are long-lived — remembered rather than reset each visit.
+  const [sidebarOpen, setSidebarOpen] = useStoredFlag('mailriz.sidebar', true);
+  const sidebar = useResizable('mailriz.sidebarWidth', { initial: 280, min: 200, max: 460 });
+  const list = useResizable('mailriz.listWidth', { initial: 360, min: 260, max: 680 });
+
   const aliases = useAliases();
   const labels = useLabels();
   const emails = useEmails(view, aliasId, labelId, q);
@@ -174,6 +212,20 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
 
   const openEmail = (id: string | null) => navigate({ ...route, emailId: id });
 
+  /**
+   * Access owns its own cookie, so there is nothing server-side of ours to
+   * end — send the browser to Cloudflare's logout. Session mode clears the
+   * cookie we issued and drops back to the login screen.
+   */
+  const logout = async () => {
+    if (me?.mode === 'access') {
+      window.location.href = '/cdn-cgi/access/logout';
+      return;
+    }
+    await api.post('/api/logout').catch(() => {});
+    window.location.href = '/';
+  };
+
   // Replace rather than push: one history entry per keystroke would make the
   // back button useless.
   const setQ = (next: string) => navigate({ ...route, q: next, emailId: null }, { replace: true });
@@ -190,7 +242,10 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
 
       <Sidebar
         open={navOpen}
+        collapsed={!sidebarOpen}
+        width={sidebar.width}
         close={() => setNavOpen(false)}
+        onLogout={logout}
         view={view}
         aliasId={aliasId}
         labelId={labelId}
@@ -203,8 +258,24 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
         me={me}
       />
 
+      {sidebarOpen && (
+        <Resizer
+          label="Resize sidebar"
+          width={sidebar.width}
+          min={sidebar.min}
+          max={sidebar.max}
+          dragging={sidebar.dragging}
+          onPointerDown={sidebar.onPointerDown}
+          onKeyDown={sidebar.onKeyDown}
+        />
+      )}
+
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
+          sidebarOpen={sidebarOpen}
+          toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          refreshing={emails.isFetching}
+          onLogout={logout}
           scope={scope}
           q={q}
           setQ={setQ}
@@ -240,10 +311,13 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
                 that the card is too narrow for three columns, so the reading
                 pane takes over the list's space while a message is open. */}
             <div
+              // The width only applies once the three panes sit side by side;
+              // below xl the list occupies the whole card.
               className={clsx(
-                'min-h-0 flex-1 flex-col border-border xl:flex xl:w-[360px] xl:flex-none xl:border-r',
+                'min-h-0 flex-1 flex-col xl:flex xl:w-[var(--list-w)] xl:flex-none',
                 selectedId ? 'hidden' : 'flex'
               )}
+              style={{ ['--list-w' as string]: `${list.width}px` }}
             >
               <EmailList
                 emails={emails.emails}
@@ -254,6 +328,17 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
                 isLoading={emails.isLoading}
               />
             </div>
+
+            <Resizer
+              at="xl"
+              label="Resize message list"
+              width={list.width}
+              min={list.min}
+              max={list.max}
+              dragging={list.dragging}
+              onPointerDown={list.onPointerDown}
+              onKeyDown={list.onKeyDown}
+            />
 
             <div
               className={clsx(
@@ -433,6 +518,10 @@ function SectionLabel({ icon: Icon, children }: { icon: any; children: React.Rea
 
 function Sidebar(props: {
   open: boolean; close: () => void;
+  /** Hidden on desktop by the collapse toggle; the drawer still works. */
+  collapsed: boolean;
+  width: number;
+  onLogout: () => void;
   view: EmailView;
   aliasId: string | null; labelId: string | null;
   aliases?: Alias[]; labels?: Label[];
@@ -450,9 +539,14 @@ function Sidebar(props: {
     <aside
       className={clsx(
         'fixed inset-y-0 left-0 z-50 flex w-[280px] shrink-0 flex-col border-r border-border bg-surface transition-transform duration-200',
+        'lg:w-[var(--sidebar-w)]',
         'lg:static lg:translate-x-0',
-        props.open ? 'translate-x-0' : '-translate-x-full'
+        props.open ? 'translate-x-0' : '-translate-x-full',
+        // Collapsing is a desktop affordance; on mobile the drawer is the
+        // only way in, so it must stay reachable there.
+        props.collapsed && 'lg:hidden'
       )}
+      style={{ ['--sidebar-w' as string]: `${props.width}px` }}
     >
       <div className="flex items-center gap-2.5 p-4">
         <div className="grid size-11 shrink-0 place-items-center rounded-[14px] bg-gradient-to-br from-accent to-accent-strong text-accent-ink">
@@ -464,9 +558,11 @@ function Sidebar(props: {
             Private Inbox
           </div>
         </div>
-        <button onClick={props.close} className={clsx(ICON_BUTTON, 'lg:hidden')} title="Close menu">
-          <X size={16} />
-        </button>
+        <Tooltip label="Close menu" side="left">
+          <button onClick={props.close} aria-label="Close menu" className={clsx(ICON_BUTTON, 'lg:hidden')}>
+            <X size={16} />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="px-3">
@@ -561,6 +657,15 @@ function Sidebar(props: {
             <div className="truncate text-[13.5px] font-semibold">{props.me?.email || '…'}</div>
             <div className="truncate text-[11.5px] text-text-faint">{props.me?.domain || ''}</div>
           </div>
+          <Tooltip label="Sign out" side="top">
+            <button
+              onClick={props.onLogout}
+              aria-label="Sign out"
+              className="grid size-9 shrink-0 place-items-center rounded-[10px] text-text-dim transition hover:bg-surface-2 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <LogOut size={16} />
+            </button>
+          </Tooltip>
         </div>
       </div>
     </aside>
@@ -573,14 +678,29 @@ function Topbar(props: {
   scope: string;
   q: string; setQ: (s: string) => void;
   onRefresh: () => void;
+  refreshing: boolean;
   onMenu: () => void;
+  sidebarOpen: boolean; toggleSidebar: () => void;
+  onLogout: () => void;
   dark: boolean; toggleTheme: () => void;
 }) {
   return (
     <div className="sticky top-0 z-30 flex h-[66px] shrink-0 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur sm:px-6">
-      <button onClick={props.onMenu} className={clsx(ICON_BUTTON, 'lg:hidden')} title="Open menu">
-        <Menu size={18} />
-      </button>
+      <Tooltip label="Open menu" side="bottom">
+        <button onClick={props.onMenu} aria-label="Open menu" className={clsx(ICON_BUTTON, 'lg:hidden')}>
+          <Menu size={18} />
+        </button>
+      </Tooltip>
+
+      <Tooltip label={props.sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} side="bottom">
+        <button
+          onClick={props.toggleSidebar}
+          aria-label={props.sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+          className={clsx(ICON_BUTTON, 'hidden lg:grid')}
+        >
+          {props.sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+        </button>
+      </Tooltip>
 
       <div className="hidden min-w-0 sm:block">
         <div className="truncate text-[12px] text-text-faint">MailRiz / {props.scope}</div>
@@ -597,22 +717,42 @@ function Topbar(props: {
             value={props.q}
             onChange={(e) => props.setQ(e.target.value)}
             placeholder="Search mail…"
+            aria-label="Search mail"
             className={clsx(
               CONTROL,
               'h-[38px] w-[180px] pr-3 pl-9 text-[13px] text-text placeholder:text-text-faint sm:w-[260px]'
             )}
           />
         </div>
-        <button onClick={props.onRefresh} className={ICON_BUTTON} title="Refresh">
-          <RefreshCw size={16} />
-        </button>
-        <button
-          onClick={props.toggleTheme}
-          className={ICON_BUTTON}
-          title={props.dark ? 'Switch to light theme' : 'Switch to dark theme'}
-        >
-          {props.dark ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
+
+        <Tooltip label={props.refreshing ? 'Refreshing…' : 'Refresh mail'} side="bottom">
+          <button
+            onClick={props.onRefresh}
+            disabled={props.refreshing}
+            aria-label="Refresh mail"
+            className={ICON_BUTTON}
+          >
+            {/* Spins while a fetch is in flight, so pressing it visibly does
+                something even when nothing new arrives. */}
+            <RefreshCw size={16} className={clsx(props.refreshing && 'animate-spin')} />
+          </button>
+        </Tooltip>
+
+        <Tooltip label={props.dark ? 'Switch to light theme' : 'Switch to dark theme'} side="bottom">
+          <button
+            onClick={props.toggleTheme}
+            aria-label={props.dark ? 'Switch to light theme' : 'Switch to dark theme'}
+            className={ICON_BUTTON}
+          >
+            {props.dark ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        </Tooltip>
+
+        <Tooltip label="Sign out" side="left">
+          <button onClick={props.onLogout} aria-label="Sign out" className={ICON_BUTTON}>
+            <LogOut size={16} />
+          </button>
+        </Tooltip>
       </div>
     </div>
   );
@@ -786,35 +926,39 @@ function ReadingPane({ emailId, onBack }: { emailId: string; onBack: () => void 
       <div className="shrink-0 border-b border-border p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-start gap-2">
-            <button onClick={onBack} className={clsx(ICON_BUTTON, 'xl:hidden')} title="Back to list">
-              <ChevronLeft size={18} />
-            </button>
+            <Tooltip label="Back to list" side="right">
+              <button onClick={onBack} aria-label="Back to list" className={clsx(ICON_BUTTON, 'xl:hidden')}>
+                <ChevronLeft size={18} />
+              </button>
+            </Tooltip>
             <h2 className="min-w-0 pt-1 text-[19px] leading-snug font-bold break-words">
               {data.subject || '(no subject)'}
             </h2>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <IconBtn title="Star" active={!!data.is_starred} onClick={() => toggle('is_starred')}>
+            <IconBtn title={data.is_starred ? 'Remove star' : 'Star this message'} active={!!data.is_starred} onClick={() => toggle('is_starred')}>
               <Star size={16} className={data.is_starred ? 'fill-warn text-warn' : ''} />
             </IconBtn>
-            <IconBtn title="Archive" active={!!data.is_archived} onClick={() => toggle('is_archived')}>
+            <IconBtn title={data.is_archived ? 'Move back to inbox' : 'Archive — keep it, out of the inbox'} active={!!data.is_archived} onClick={() => toggle('is_archived')}>
               <Archive size={16} />
             </IconBtn>
-            <IconBtn title="Trash" active={!!data.is_trashed} onClick={() => toggle('is_trashed')}>
+            <IconBtn title={data.is_trashed ? 'Restore from trash' : 'Move to trash — purged after 30 days'} active={!!data.is_trashed} onClick={() => toggle('is_trashed')}>
               <Trash2 size={16} />
             </IconBtn>
-            <IconBtn title="Mark unread" onClick={() => toggle('is_read')}>
+            <IconBtn title={data.is_read ? 'Mark as unread' : 'Mark as read'} onClick={() => toggle('is_read')}>
               <Mail size={16} />
             </IconBtn>
-            <a
-              href={`/api/emails/${emailId}/raw`}
-              target="_blank"
-              rel="noreferrer"
-              title="Download .eml"
-              className="grid size-9 place-items-center rounded-[10px] text-text-dim transition hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <FileText size={16} />
-            </a>
+            <Tooltip label="Download original .eml" side="bottom">
+              <a
+                href={`/api/emails/${emailId}/raw`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Download original .eml"
+                className="grid size-9 place-items-center rounded-[10px] text-text-dim transition hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                <FileText size={16} />
+              </a>
+            </Tooltip>
           </div>
         </div>
 
@@ -910,19 +1054,21 @@ function ReadingPane({ emailId, onBack }: { emailId: string; onBack: () => void 
 
 function IconBtn(props: { title: string; active?: boolean; onClick?: () => void; children: React.ReactNode }) {
   return (
-    <button
-      title={props.title}
-      onClick={props.onClick}
-      className={clsx(
-        'grid size-9 place-items-center rounded-[10px] transition',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-        props.active
-          ? 'bg-nav-surface text-accent-strong'
-          : 'text-text-dim hover:bg-surface-2 hover:text-text'
-      )}
-    >
-      {props.children}
-    </button>
+    <Tooltip label={props.title} side="bottom">
+      <button
+        aria-label={props.title}
+        onClick={props.onClick}
+        className={clsx(
+          'grid size-9 place-items-center rounded-[10px] transition',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+          props.active
+            ? 'bg-nav-surface text-accent-strong'
+            : 'text-text-dim hover:bg-surface-2 hover:text-text'
+        )}
+      >
+        {props.children}
+      </button>
+    </Tooltip>
   );
 }
 

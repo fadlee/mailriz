@@ -104,6 +104,23 @@ export const jwtAuth = createMiddleware<AppContext>(async (c, next) => {
 });
 
 /**
+ * Log out of session mode by expiring the cookie.
+ *
+ * Access mode has no server-side session of ours to end — Cloudflare owns
+ * that cookie — so the dashboard sends the browser to
+ * /cdn-cgi/access/logout instead. This endpoint stays harmless there.
+ */
+export async function logoutHandler(c: any): Promise<Response> {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    },
+  });
+}
+
+/**
  * Login endpoint for session mode. POST /api/login { email, password }.
  * Verifies email === ADMIN_EMAIL and password hash matches.
  */

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useQuery,
   useMutation,
@@ -126,6 +126,27 @@ function useStoredFlag(key: string, fallback: boolean): [boolean, (v: boolean) =
   ];
 }
 
+/**
+ * Keeps a flag true for at least `minMs` after being set, even if the work
+ * finished sooner. The refresh button spins off `refreshing`; on a fast
+ * request that can be a few milliseconds, too quick to see. The minimum
+ * makes the animation legible without faking the fetch.
+ */
+function useMinSpin(minMs: number): [boolean, () => void] {
+  const [active, setActive] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const trigger = useCallback(() => {
+    setActive(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setActive(false), minMs);
+  }, [minMs]);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  return [active, trigger];
+}
+
 /** Light by default; the choice is mirrored onto <html data-theme> and stored.
  *  index.html replays it before first paint so there's no flash on reload. */
 function useTheme() {
@@ -186,6 +207,10 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
 
   // Poll every 25s + on focus.
   usePolling(emails.refetch, 25_000);
+
+  // The refresh button spins for at least this long, so the animation is
+  // legible even when the fetch finishes in a few milliseconds.
+  const [refreshSpinning, triggerRefreshSpin] = useMinSpin(700);
 
   const selectedEmail = emails.emails.find((e) => e.id === selectedId) || null;
 
@@ -274,31 +299,21 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
         <Topbar
           sidebarOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-          refreshing={emails.isFetching}
+          refreshing={emails.isFetching || refreshSpinning}
           onLogout={logout}
           scope={scope}
           q={q}
           setQ={setQ}
-          onRefresh={emails.refetch}
+          onRefresh={() => {
+            triggerRefreshSpin();
+            emails.refetch();
+          }}
           onMenu={() => setNavOpen(true)}
           dark={theme.dark}
           toggleTheme={theme.toggle}
         />
 
         <main className="flex min-h-0 flex-1 flex-col gap-5 p-4 sm:p-6">
-          <header className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
-            <div>
-              <h1 className="text-xl font-extrabold tracking-tight">Mail</h1>
-              <p className="mt-1 text-[14px] text-text-dim">
-                Private inbox with disposable aliases, labels, and blocked remote images.
-              </p>
-            </div>
-            <p className="text-[13px] text-text-faint">
-              {scope} · {emails.emails.length}
-              {emails.next ? '+' : ''} {emails.emails.length === 1 ? 'message' : 'messages'}
-            </p>
-          </header>
-
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface shadow-[var(--shadow)] lg:flex-row">
             <FolderRail
               view={view}

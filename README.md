@@ -89,8 +89,18 @@ Mail arrives, gets stored in your buckets, and shows up in the dashboard. [Deep 
 
 - Bun monorepo: `packages/app` (Worker + React), `packages/cli`, `packages/shared`, `docs`
 - Local dev: `bun install && bun run dev:app` (wrangler) + `bun run dev:web` (vite)
-- Tests: `bun test` — 127+ tests across worker, CLI, and web
+- Tests: `bun test` — 179+ tests across worker, CLI, and web
 - Releases: push a tag, CI publishes to npm + GitHub Releases
+
+Published packages carry [npm provenance][prov] — a signed attestation tying
+the tarball to the workflow run and commit that built it. Verify before
+installing, if you like:
+
+```bash
+npm audit signatures
+```
+
+[prov]: https://docs.npmjs.com/generating-provenance-statements
 
 ---
 

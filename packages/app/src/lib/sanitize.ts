@@ -13,14 +13,17 @@
  * - `javascript:` / `vbscript:` URLs in href/src/action
  *
  * None of that affects how a message looks, so removing it costs no fidelity.
- * It is defence in depth: the CSP already denies scripts, and the reading pane
- * frames the body in a sandboxed iframe. This is the layer that still holds if
- * one of those is ever misconfigured.
  *
- * Runs on the Worker (V8) — no DOM, so this is a regex pass rather than a
- * parse. It is deliberately narrow: a parser-light pass can be fooled into
- * *keeping* something it should have dropped, which is why it is not the only
- * defence.
+ * **This is not a security boundary.** It runs on the Worker (V8) with no DOM,
+ * so it is regex over HTML, and HTML offers more ways to write a handler than
+ * a regex can enumerate — `<img/onerror=…>` with a slash instead of a space,
+ * an entity-encoded scheme, a tab inside `javascript:`, `srcdoc`, and
+ * `<meta http-equiv=refresh>` all survive it. Verified, not assumed.
+ *
+ * What actually stops scripts is the CSP on the response (`default-src 'none'`
+ * plus `sandbox`) and the sandboxed iframe in the reading pane. Neither of
+ * those depends on this function being thorough, and neither should ever be
+ * relaxed on the strength of it.
  */
 
 /** `<script …>…</script>`, plus an unterminated trailing one. */

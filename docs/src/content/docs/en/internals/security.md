@@ -31,10 +31,19 @@ Content-Security-Policy:
 - **`img-src`** is what withholds remote images. Blocking is a header concern,
   which is precisely what allows the markup to be left alone.
 
-As a second layer, active content is stripped at ingest: `<script>` blocks,
-`on*` handlers, and `javascript:`/`vbscript:` URLs. None of that affects how a
-message looks, so it costs no fidelity — and it still holds if the CSP is ever
-misconfigured.
+Obvious active content is also stripped at ingest — `<script>` blocks, plain
+`on*` handlers, and `javascript:`/`vbscript:` URLs — which costs no fidelity
+because none of it affects how a message looks.
+
+**Treat that as tidying, not as a defence.** It is regex over HTML, and HTML
+has more ways to write an event handler than a regex can enumerate: a `/`
+instead of a space before `onerror`, an entity-encoded scheme, a tab inside
+`javascript:`, `srcdoc`, `<meta http-equiv=refresh>`. All of those get past it.
+
+The CSP above is what actually stops scripts running, and it does not depend on
+the stripper being thorough. An earlier version of this page claimed the
+stripper would still hold if the CSP were misconfigured; that was wrong, and
+saying so mattered more than the sentence sounded.
 
 ## Attachments
 

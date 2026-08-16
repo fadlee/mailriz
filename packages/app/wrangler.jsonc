@@ -9,7 +9,12 @@
     "binding": "ASSETS",
     // The dashboard routes client-side (/inbox, /alias/:id, …). Without this,
     // reloading on any of those paths matches no file and 404s.
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // …but the SPA fallback swallows *navigation* requests to /api/* — an
+    // iframe pointed at /api/emails/:id/html got index.html back instead of
+    // the message. Fetches were unaffected, which is why it hid. Run the
+    // Worker first for the API so the fallback can never reach it.
+    "run_worker_first": ["/api/*"]
   },
   "triggers": {
     "crons": ["0 4 * * *"]

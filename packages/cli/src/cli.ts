@@ -160,6 +160,10 @@ async function deployWithWrangler(opts: {
       directory: './assets',
       binding: 'ASSETS',
       not_found_handling: 'single-page-application',
+      // Without this the SPA fallback answers navigation requests to /api/*
+      // with index.html — an iframe loading a message body got the dashboard
+      // shell instead. Fetches were unaffected, so it only broke the frame.
+      run_worker_first: ['/api/*'],
     },
     triggers: { crons: ['0 4 * * *'] },
     // A Custom Domain, not a route: Cloudflare creates the DNS record and

@@ -8,13 +8,12 @@
 
 [**📖 Documentation**](https://rizkirmdhnnn.github.io/mailriz/) · [Quick start][quickstart] · [How it works][internals]
 
-<!-- GitHub does not render <video> from a repo path, so this is the poster
-     linking to the docs home page, where the clip actually plays. -->
-<a href="https://rizkirmdhnnn.github.io/mailriz/">
-  <img src="docs/public/mailriz-intro-poster.jpg" alt="Watch the 30-second intro" width="640">
-</a>
+<!-- A GIF, not <video>: GitHub will not render a player from a repo path, and
+     an animated image is the only thing that plays inline here. The full-
+     resolution MP4, with pause and scrub, is on the docs site. -->
+<img src=".github/assets/mailriz-intro.gif" alt="MailRiz in 30 seconds: the problem, the inbox, one-command setup" width="720">
 
-**▶ [Watch the 30-second intro](https://rizkirmdhnnn.github.io/mailriz/)**
+*[Watch it in full quality on the docs site →](https://rizkirmdhnnn.github.io/mailriz/)*
 
 </div>
 

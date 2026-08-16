@@ -24,5 +24,8 @@ jobs:
       - name: Build web
         run: bun run --cwd packages/app/web build
 
+      - name: Build docs
+        run: bun run docs:build
+
       - name: Test
         run: bun run test

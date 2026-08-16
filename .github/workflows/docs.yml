@@ -1,0 +1,52 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  # Lets you republish without pushing — useful after enabling Pages for the
+  # first time, when the initial run has nothing to deploy.
+  workflow_dispatch:
+
+# Pages needs these; GITHUB_TOKEN covers both, so there is no secret to set up.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A newer commit should win, but never cancel a deploy that is already writing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Build site
+        run: bun run docs:build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

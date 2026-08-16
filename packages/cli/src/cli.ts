@@ -31,6 +31,7 @@ import {
 } from './cf';
 import { applyMigrations } from './migrate';
 import { resolveToken, sourceHint, validateToken, type TokenSources } from './token';
+import { spawnAndWait } from './proc';
 import { hashPassword, generateSigningKey } from '@mailriz/shared';
 
 const execFileP = promisify(execFile);
@@ -209,19 +210,8 @@ async function deployWithWrangler(opts: {
 }
 
 /**
- * Run wrangler as a child process and wait for it to finish.
- *
- * Two details here are load-bearing, and both were learned the hard way.
- *
- * **stdout is discarded, not piped and not inherited.** Piping it is what made
- * `setup` and `update` hang at "worker redeploying…": wrangler can leave a
- * handle on the stream open after a successful deploy, and anything that waits
- * for stdio to end — execFile, or spawn with a piped stdout — waits forever
- * even though the deploy already landed. Inheriting it fixes the hang but
- * wrecks the display: the task list repaints every 80ms with cursor moves, and
- * wrangler's own output tears straight through it. Discarding does neither.
- *
- * stderr is still captured, so a failure has something to report.
+ * Run wrangler from our own node_modules, so the CLI works from any directory
+ * with no global install. See spawnAndWait for why exit rather than close.
  */
 function runWrangler(
   args: string[],
@@ -229,23 +219,7 @@ function runWrangler(
 ): Promise<void> {
   const require = createRequire(import.meta.url);
   const wranglerBin = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js');
-
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [wranglerBin, ...args], {
-      cwd: opts.cwd,
-      env: opts.env,
-      stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    child.stderr?.on('data', (d) => { stderr += d; });
-    child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(stderr.trim() || `wrangler ${args.join(' ')} exited ${code}`))
-    );
-    if (opts.stdin !== undefined) child.stdin!.end(opts.stdin);
-  });
+  return spawnAndWait(process.execPath, [wranglerBin, ...args], opts);
 }
 
 /**

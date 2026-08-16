@@ -6,7 +6,10 @@
   "workers_dev": false,
   "assets": {
     "directory": "./web/dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // The dashboard routes client-side (/inbox, /alias/:id, …). Without this,
+    // reloading on any of those paths matches no file and 404s.
+    "not_found_handling": "single-page-application"
   },
   "triggers": {
     "crons": ["0 4 * * *"]

@@ -15,6 +15,10 @@
     "dist",
     "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rizkirmdhnnn/mailriz.git"
+  },
   "dependencies": {
     "wrangler": "^4"
   },

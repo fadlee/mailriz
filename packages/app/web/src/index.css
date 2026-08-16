@@ -1,48 +1,52 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------- tokens
-   Matcha theme. Light is the default; [data-theme="dark"] overrides it.
-   The anti-FOUC script in index.html sets the attribute before first paint. */
+   Palette derived from the MailRiz mark: #6b74c8 / #98a2e6 / #cdd3f5 on a
+   #1d1e3a tile. The neutrals are cooled to match — an indigo accent over the
+   old warm sand read as two unrelated palettes sharing a screen.
+   Light is the default; [data-theme="dark"] overrides it. The anti-FOUC
+   script in index.html sets the attribute before first paint. */
 
 :root {
   color-scheme: light;
 
-  --bg: #f4f2ec;
+  --bg: #f4f5fa;
   --surface: #ffffff;
-  --surface-2: #faf8f2;
-  --surface-3: #efece4;
-  --border: #e9e5db;
-  --border-soft: #f0ede5;
-  --text: #1c1b19;
-  --text-dim: #6f6b64;
-  --text-faint: #9c948a;
-  --accent: #10b981;
+  --surface-2: #fafbfe;
+  --surface-3: #ebedf6;
+  --border: #e1e4f0;
+  --border-soft: #eceef7;
+  --text: #1a1b2e;
+  --text-dim: #5f6379;
+  --text-faint: #9297ad;
+  --accent: #5760bb;
   --accent-ink: #ffffff;
-  --accent-strong: #0f7a52;
+  --accent-strong: #3d4694;
   --ok: #12a06a;
   --warn: #d98a2b;
   --danger: #e5544b;
   --info: #3f7ad6;
-  --nav-surface: #eaf7f0;
-  --shadow: 0 1px 2px #14120e08, 0 4px 14px #14120e0d;
+  --nav-surface: #eceffb;
+  --shadow: 0 1px 2px #1a1b2e0a, 0 4px 14px #1a1b2e0f;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #14150f;
-  --surface: #1d1e17;
-  --surface-2: #24251d;
-  --surface-3: #2e3026;
-  --border: #2f3128;
-  --border-soft: #23241d;
-  --text: #eef0e6;
-  --text-dim: #a6a89a;
-  --text-faint: #6f7266;
-  --accent: #2fd39a;
-  --accent-ink: #04140d;
-  --accent-strong: #6fe4b6;
-  --nav-surface: #1e2a22;
+  --bg: #131426;
+  /* the mark's own tile colour, so the logo sits flush on panel surfaces */
+  --surface: #1d1e3a;
+  --surface-2: #252747;
+  --surface-3: #2f3158;
+  --border: #343663;
+  --border-soft: #262848;
+  --text: #e8eaf6;
+  --text-dim: #a2a7c4;
+  --text-faint: #6e7396;
+  --accent: #98a2e6;
+  --accent-ink: #14152b;
+  --accent-strong: #cdd3f5;
+  --nav-surface: #232650;
   --shadow: 0 1px 2px #0000004d, 0 12px 30px #0006;
 }
 

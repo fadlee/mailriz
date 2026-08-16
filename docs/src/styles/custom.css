@@ -1,0 +1,17 @@
+/*
+ * Starlight's stock accent is a purple that is close to the mark but not it.
+ * These values are the mark's own: #5760bb / #98a2e6 / #cdd3f5, matching the
+ * dashboard's tokens so the docs and the app read as one product.
+ */
+:root {
+  /* dark mode is Starlight's default :root */
+  --sl-color-accent-low: #262848;
+  --sl-color-accent: #5760bb;
+  --sl-color-accent-high: #cdd3f5;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e8eaf8;
+  --sl-color-accent: #4c56a8;
+  --sl-color-accent-high: #2b3269;
+}

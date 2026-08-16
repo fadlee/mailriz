@@ -13,6 +13,7 @@ import { api, ApiError } from './lib/api';
 import { useRoute } from './lib/useRoute';
 import { toScope, toView } from './lib/route';
 import { Tooltip } from './lib/Tooltip';
+import { Logo } from './lib/Logo';
 import { Resizer } from './lib/Resizer';
 import { useResizable } from './lib/useResizable';
 import { useLiveMail } from './lib/useLiveMail';
@@ -397,9 +398,7 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
 function Brand() {
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="grid size-14 place-items-center rounded-[18px] bg-gradient-to-br from-accent to-accent-strong text-accent-ink">
-        <Mail size={26} />
-      </div>
+      <Logo size={56} />
       <div className="text-center">
         <div className="text-[19px] font-extrabold tracking-tight">MailRiz</div>
         <div className="text-[11px] font-bold tracking-widest text-text-faint uppercase">
@@ -563,9 +562,7 @@ function Sidebar(props: {
       style={{ ['--sidebar-w' as string]: `${props.width}px` }}
     >
       <div className="flex items-center gap-2.5 p-4">
-        <div className="grid size-11 shrink-0 place-items-center rounded-[14px] bg-gradient-to-br from-accent to-accent-strong text-accent-ink">
-          <Mail size={20} />
-        </div>
+        <Logo size={44} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[15px] font-extrabold tracking-tight">MailRiz</div>
           <div className="truncate text-[11px] font-bold tracking-widest text-text-faint uppercase">

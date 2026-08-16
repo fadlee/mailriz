@@ -29,6 +29,7 @@ export default defineConfig({
         light: './src/assets/mailriz-mark-tile.svg',
         alt: 'MailRiz',
       },
+      customCss: ['./src/styles/custom.css'],
       // PNG fallbacks for browsers that ignore SVG favicons, plus the iOS
       // home-screen icon. The SVG itself is picked up from public/favicon.svg.
       head: [

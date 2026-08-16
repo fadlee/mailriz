@@ -300,7 +300,6 @@ function Dashboard({ me, theme }: { me?: MeResponse; theme: Theme }) {
           sidebarOpen={sidebarOpen}
           toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           refreshing={emails.isFetching || refreshSpinning}
-          onLogout={logout}
           scope={scope}
           q={q}
           setQ={setQ}
@@ -696,7 +695,6 @@ function Topbar(props: {
   refreshing: boolean;
   onMenu: () => void;
   sidebarOpen: boolean; toggleSidebar: () => void;
-  onLogout: () => void;
   dark: boolean; toggleTheme: () => void;
 }) {
   return (
@@ -760,12 +758,6 @@ function Topbar(props: {
             className={ICON_BUTTON}
           >
             {props.dark ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-        </Tooltip>
-
-        <Tooltip label="Sign out" side="left">
-          <button onClick={props.onLogout} aria-label="Sign out" className={ICON_BUTTON}>
-            <LogOut size={16} />
           </button>
         </Tooltip>
       </div>

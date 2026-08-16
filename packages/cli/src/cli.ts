@@ -9,7 +9,7 @@
  *   destroy  Tear down everything (with double confirmation)
  */
 
-import { text, select, confirm, isCancel } from '@clack/prompts';
+import { text, password, select, confirm, isCancel } from '@clack/prompts';
 import pc from 'picocolors';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -78,9 +78,12 @@ async function promptToken(cfg: Config, purpose: string): Promise<string> {
     env: process.env.CLOUDFLARE_API_TOKEN,
   };
 
-  const answer = (await text({
+  // Masked: this token can delete the Worker, the database and every stored
+  // message, and terminals get recorded and shared. password() has no
+  // placeholder, so the source hint becomes its own line.
+  hint(sourceHint(sources));
+  const answer = (await password({
     message: `Cloudflare API Token — ${purpose}`,
-    placeholder: sourceHint(sources),
     validate: (v) => validateToken(v || '', sources),
   })) as string;
   if (isCancel(answer)) process.exit(0);
@@ -323,9 +326,9 @@ async function cmdSetup() {
   if (isCancel(openBrowser)) process.exit(0);
   if (openBrowser) await openUrl(tokenUrl);
 
-  const token = (await text({
+  hint('blank = use $CLOUDFLARE_API_TOKEN');
+  const token = (await password({
     message: 'Paste the token',
-    placeholder: 'blank = use $CLOUDFLARE_API_TOKEN',
     validate: (v) => {
       if (v && v.length > 20) return undefined;
       return process.env.CLOUDFLARE_API_TOKEN ? undefined : 'Token looks too short';
@@ -431,11 +434,11 @@ async function cmdSetup() {
   let sessionHash: string | undefined;
   let signingKey: string | undefined;
   if (!useAccess) {
-    const pw = (await text({
+    hint('min 12 chars');
+    const pw = (await password({
       message: accessAvailable
         ? 'Set a dashboard password'
         : 'Set a dashboard password (Access unavailable)',
-      placeholder: 'min 12 chars',
       validate: (v) => (v && v.length >= 12 ? undefined : 'min 12 chars'),
     })) as string;
     if (isCancel(pw)) process.exit(0);
@@ -849,9 +852,9 @@ async function cmdUpdate() {
     hint('Session credentials are being upgraded (salted hash + separate cookie key).');
     hint('The old password cannot be carried over, so set it again — existing');
     hint('sessions will end and you will log in once more.');
-    const pw = (await text({
+    hint('min 12 chars');
+    const pw = (await password({
       message: 'Dashboard password',
-      placeholder: 'min 12 chars',
       validate: (v) => (v && v.length >= 12 ? undefined : 'min 12 chars'),
     })) as string;
     if (isCancel(pw)) process.exit(0);

@@ -21,9 +21,16 @@ interface ApiEnvelope {
   result?: unknown;
 }
 
+/**
+ * Not every endpoint answers with an envelope. `DELETE /workers/domains/{id}`
+ * replies with a bare `null`, which is valid JSON — so it parses cleanly and
+ * then blows up on `body.result` a line later, reporting a delete that had in
+ * fact succeeded as a failure. Anything that is not an object becomes `{}`.
+ */
 async function parseEnvelope(res: Response): Promise<ApiEnvelope> {
   try {
-    return (await res.json()) as ApiEnvelope;
+    const body = await res.json();
+    return body !== null && typeof body === 'object' ? (body as ApiEnvelope) : {};
   } catch {
     return {};
   }
@@ -47,6 +54,41 @@ export async function cfFetch<T>(
     throw new CfError(res.status, body?.errors || [], body?.errors?.[0]?.message || res.statusText);
   }
   return body.result as T;
+}
+
+// ---------------------------------------------------------------- teardown
+
+/**
+ * What a delete actually did. `destroy` used to report "deleted" for all of
+ * a revoked token, a resource already removed by hand, and a bucket that
+ * refused to go; telling those apart is the point of this type.
+ */
+export type DeleteOutcome = 'deleted' | 'absent';
+
+/** Cloudflare says "not found" with a 404, and occasionally with a 200 + message. */
+function isMissing(e: unknown): boolean {
+  if (!(e instanceof CfError)) return false;
+  if (e.status === 404) return true;
+  return /not\s*found|could not be found|does not exist|no such/i.test(e.message);
+}
+
+/**
+ * DELETE a resource and say which of the two acceptable things happened.
+ * Anything else propagates: a teardown that cannot prove the resource is
+ * gone must not claim it is.
+ */
+export async function cfDelete(
+  token: string,
+  path: string,
+  init?: RequestInit
+): Promise<DeleteOutcome> {
+  try {
+    await cfFetch<unknown>(token, path, { ...init, method: 'DELETE' });
+    return 'deleted';
+  } catch (e) {
+    if (isMissing(e)) return 'absent';
+    throw e;
+  }
 }
 
 /**
@@ -129,6 +171,10 @@ export async function createD1(token: string, accountId: string, name: string): 
   return assertD1(db, 'create');
 }
 
+export function deleteD1(token: string, accountId: string, dbId: string): Promise<DeleteOutcome> {
+  return cfDelete(token, `/accounts/${accountId}/d1/database/${dbId}`);
+}
+
 export async function d1Query(token: string, accountId: string, dbId: string, sql: string): Promise<{ success: boolean; results?: unknown[] }> {
   return cfFetch<{ success: boolean; results?: unknown[] }>(
     token,
@@ -162,6 +208,14 @@ export async function createR2Bucket(token: string, accountId: string, name: str
   return { name: bucket?.name || name };
 }
 
+/**
+ * Cloudflare refuses this while the bucket still holds objects, so callers
+ * must empty it first — see emptyBucket in r2.ts.
+ */
+export function deleteR2Bucket(token: string, accountId: string, name: string): Promise<DeleteOutcome> {
+  return cfDelete(token, `/accounts/${accountId}/r2/buckets/${encodeURIComponent(name)}`);
+}
+
 // --- Workers ---
 
 export interface WorkerScript {
@@ -169,10 +223,101 @@ export interface WorkerScript {
   modified_on: string;
 }
 
+export async function listWorkerScripts(token: string, accountId: string): Promise<WorkerScript[]> {
+  const res = await cfFetch<unknown>(token, `/accounts/${accountId}/workers/scripts`);
+  return asList<WorkerScript>(res, 'scripts', 'list Worker scripts');
+}
+
+export function deleteWorkerScript(token: string, accountId: string, name: string): Promise<DeleteOutcome> {
+  // force=true lets the delete through when a binding still references it.
+  return cfDelete(token, `/accounts/${accountId}/workers/scripts/${encodeURIComponent(name)}?force=true`);
+}
+
+/**
+ * A Custom Domain is a resource of its own, not a property of the script, and
+ * it owns the DNS record. Deleting the Worker does not reliably take it along.
+ */
+export interface WorkerDomain {
+  id: string;
+  hostname: string;
+  zone_id: string;
+  service: string;
+  cert_id?: string;
+}
+
+export async function listWorkerDomains(
+  token: string,
+  accountId: string,
+  query: { zoneId?: string; hostname?: string } = {}
+): Promise<WorkerDomain[]> {
+  const params = new URLSearchParams();
+  if (query.zoneId) params.set('zone_id', query.zoneId);
+  if (query.hostname) params.set('hostname', query.hostname);
+  const qs = params.toString();
+  const res = await cfFetch<unknown>(
+    token,
+    `/accounts/${accountId}/workers/domains${qs ? `?${qs}` : ''}`
+  );
+  return asList<WorkerDomain>(res, 'domains', 'list Worker domains');
+}
+
+export function deleteWorkerDomain(
+  token: string,
+  accountId: string,
+  domainId: string
+): Promise<DeleteOutcome> {
+  return cfDelete(token, `/accounts/${accountId}/workers/domains/${domainId}`);
+}
+
 // --- Email Routing ---
 
 export async function getEmailRoutingSettings(token: string, zoneId: string): Promise<{ enabled: boolean; id: string }> {
   return cfFetch<{ enabled: boolean; id: string }>(token, `/zones/${zoneId}/email/routing`);
+}
+
+export interface CatchAllRule {
+  enabled: boolean;
+  actions?: { type: string; value?: string[] }[];
+}
+
+export async function getCatchAllRule(token: string, zoneId: string): Promise<CatchAllRule> {
+  return cfFetch<CatchAllRule>(token, `/zones/${zoneId}/email/routing/rules/catch_all`);
+}
+
+/**
+ * Whether a catch-all still delivers to this Worker. Left pointing at a
+ * deleted script, it silently drops every message the domain receives.
+ */
+export function catchAllTargets(rule: CatchAllRule | null | undefined, workerName: string): boolean {
+  if (!rule?.enabled) return false;
+  return (rule.actions || []).some(
+    (a) => a.type === 'worker' && (a.value || []).includes(workerName)
+  );
+}
+
+/**
+ * Point the catch-all away from the Worker without touching the rest of the
+ * zone's mail. There is no DELETE for it — it always exists — so it is
+ * disabled instead.
+ */
+export function clearCatchAll(token: string, zoneId: string): Promise<unknown> {
+  return cfFetch(token, `/zones/${zoneId}/email/routing/rules/catch_all`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: 'mailriz catch-all (removed)',
+      enabled: false,
+      matchers: [{ type: 'all' }],
+      actions: [{ type: 'drop' }],
+    }),
+  });
+}
+
+/**
+ * Cloudflare removes the MX, SPF and DKIM records it added, so this is only
+ * correct when setup was what enabled routing in the first place.
+ */
+export function disableEmailRouting(token: string, zoneId: string): Promise<unknown> {
+  return cfFetch(token, `/zones/${zoneId}/email/routing/disable`, { method: 'POST' });
 }
 
 export async function enableEmailRouting(token: string, zoneId: string): Promise<{ enabled: boolean }> {
@@ -265,5 +410,41 @@ export async function createAccessPolicy(
       include: [{ email: { email: adminEmail } }],
     }),
   });
+}
+
+export interface AccessAppSummary extends AccessApp {
+  domain?: string;
+  name?: string;
+}
+
+export async function listAccessApps(token: string, accountId: string): Promise<AccessAppSummary[]> {
+  const res = await cfFetch<unknown>(token, `/accounts/${accountId}/access/apps?per_page=100`);
+  return asList<AccessAppSummary>(res, 'apps', 'list Access applications');
+}
+
+export function deleteAccessApp(
+  token: string,
+  accountId: string,
+  appId: string
+): Promise<DeleteOutcome> {
+  return cfDelete(token, `/accounts/${accountId}/access/apps/${appId}`);
+}
+
+/**
+ * Find the Access application guarding a hostname. Installations from before
+ * the app id was persisted only recorded the `aud` tag, so the id has to be
+ * recovered by matching one or the other.
+ */
+export function findAccessApp(
+  apps: AccessAppSummary[],
+  hostname: string,
+  aud?: string
+): AccessAppSummary | undefined {
+  if (aud) {
+    const byAud = apps.find((a) => a.aud === aud);
+    if (byAud) return byAud;
+  }
+  // `domain` comes back as the bare hostname, sometimes with a trailing path.
+  return apps.find((a) => (a.domain || '').replace(/\/+$/, '') === hostname);
 }
 

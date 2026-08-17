@@ -62,6 +62,17 @@ It reports whether a token is on disk — never its value.
 
 ## Rotating
 
-Create a new token, then re-run `setup`, or export the new value before running
-`update`. If a saved token has been revoked in Cloudflare, commands fail with
-an authentication error; delete `~/.mailriz/config.json` to clear it locally.
+Create a new token, then either export it as `$CLOUDFLARE_API_TOKEN` or paste
+it at the prompt the next time a command asks. `update`, `reconfigure` and
+`destroy` all prefer what you type over what is saved, so a rotated token
+needs no other step.
+
+If a revoked token is sitting in `~/.mailriz/config.json`, commands fail with
+an authentication error. Run `reconfigure` and paste the new one to replace it.
+
+:::caution
+Do not delete `~/.mailriz/config.json` to clear a stale token. It is the only
+record of which Worker, database and buckets belong to your installation, and
+`setup` refuses to run while a deployment it cannot see may still exist —
+removing the file leaves the deployment running with nothing pointing at it.
+:::

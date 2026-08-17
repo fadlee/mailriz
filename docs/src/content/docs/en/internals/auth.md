@@ -83,7 +83,8 @@ password auth. You are never left with a half-built install that nobody can
 open.
 
 To use Access, add **Account → Access: Apps and Policies → Edit** to your token
-and re-run setup.
+and run `mailriz-cli reconfigure`. It switches an existing installation over
+without touching the database or the buckets.
 
 ## The API
 

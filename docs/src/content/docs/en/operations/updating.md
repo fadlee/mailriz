@@ -48,8 +48,9 @@ migrations it finds already applied instead of failing on them.
 
 If your deployment uses Cloudflare Access, `update` refuses to run when no
 audience tag is recorded for it. Redeploying without one would leave the Worker
-rejecting every request and lock you out of the dashboard. Re-run `setup`
-instead — the message says so.
+rejecting every request and lock you out of the dashboard. Run `reconfigure`
+instead — it reads the Access application back, records its audience tag, and
+keeps your mail. The message says so.
 
 ## Checking what you have
 

@@ -60,10 +60,11 @@ Everything else (D1 database, R2 storage, email routing) stays within Cloudflare
 ## 🛠️ Commands
 
 ```bash
-bunx mailriz-cli setup    # deploy end-to-end
-bunx mailriz-cli status   # check health
-bunx mailriz-cli update   # update to latest (data preserved)
-bunx mailriz-cli destroy  # tear down (asks twice)
+bunx mailriz-cli setup        # deploy end-to-end
+bunx mailriz-cli status       # check health
+bunx mailriz-cli update       # update to latest (data preserved)
+bunx mailriz-cli reconfigure  # change auth or admin email (data preserved)
+bunx mailriz-cli destroy      # tear down everything, DNS and R2 included
 ```
 
 [CLI reference →][cli] · [Configuration →][config]

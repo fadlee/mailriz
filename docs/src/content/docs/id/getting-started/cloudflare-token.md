@@ -63,7 +63,19 @@ Perintah itu melaporkan ada atau tidaknya token di disk — tidak pernah isinya.
 
 ## Merotasi token
 
-Buat token baru, lalu jalankan `setup` ulang, atau ekspor nilai barunya sebelum
-menjalankan `update`. Kalau token tersimpan sudah dicabut di Cloudflare,
-perintah akan gagal dengan galat autentikasi; hapus `~/.mailriz/config.json`
-untuk membersihkannya secara lokal.
+Buat token baru, lalu ekspor sebagai `$CLOUDFLARE_API_TOKEN` atau tempelkan di
+prompt saat sebuah perintah menanyakannya. `update`, `reconfigure`, dan
+`destroy` selalu mengutamakan yang Anda ketik daripada yang tersimpan, jadi
+rotasi token tidak butuh langkah lain.
+
+Kalau token yang sudah dicabut tersimpan di `~/.mailriz/config.json`, perintah
+akan gagal dengan galat autentikasi. Jalankan `reconfigure` dan tempelkan token
+baru untuk menggantinya.
+
+:::caution
+Jangan menghapus `~/.mailriz/config.json` hanya untuk membuang token basi. File
+itu satu-satunya catatan tentang Worker, database, dan bucket mana yang milik
+instalasi Anda, dan `setup` menolak berjalan selama ada deployment yang tidak
+terlihat olehnya — menghapus file itu meninggalkan deployment tetap berjalan
+tanpa apa pun yang menunjuk ke sana.
+:::

@@ -29,7 +29,9 @@ Then check, in order:
 
 - **In access mode**, an empty audience tag makes the Worker reject every
   request. `mailriz-cli status` shows the auth mode; if it is `access` and the
-  install has no aud recorded, re-run `setup`.
+  install has no aud recorded, run `mailriz-cli reconfigure`. It finds the
+  existing Access application rather than creating a second one on the same
+  hostname.
 - **In session mode**, a 401 should show the login screen. If it does not, the
   Worker may not be answering at all — check `/healthz`.
 

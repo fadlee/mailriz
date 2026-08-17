@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import {
@@ -24,11 +24,22 @@ import {
 } from './ui';
 import {
   verifyToken, listAccounts, listZones,
-  listD1, createD1, d1Query,
-  listR2Buckets, createR2Bucket,
+  listD1, createD1, d1Query, deleteD1,
+  listR2Buckets, createR2Bucket, deleteR2Bucket,
+  listWorkerScripts, deleteWorkerScript,
+  listWorkerDomains, deleteWorkerDomain,
   enableEmailRouting, setCatchAllToWorker, getEmailRoutingSettings,
+  getCatchAllRule, catchAllTargets, clearCatchAll, disableEmailRouting,
   getAccessOrganization, createAccessApp, createAccessPolicy,
+  listAccessApps, deleteAccessApp, findAccessApp,
 } from './cf';
+import {
+  createR2Client, deriveS3Credentials, emptyBucket, type R2Client,
+} from './r2';
+import {
+  takeInventory, bucketsOf, describeBucket, leftovers, routingChoice,
+  destroySummary, UNREADABLE, type Inventory,
+} from './teardown';
 import { applyMigrations } from './migrate';
 import { resolveToken, sourceHint, validateToken, type TokenSources } from './token';
 import { spawnAndWait } from './proc';
@@ -37,6 +48,8 @@ import { hashPassword, generateSigningKey } from '@mailriz/shared';
 const execFileP = promisify(execFile);
 const CONFIG_DIR = join(homedir(), '.mailriz');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
+/** Worker, D1 database and bucket prefix are all fixed — one install per account. */
+const WORKER_NAME = 'mailriz';
 const TMP_DIR = join(CONFIG_DIR, '.temp');
 const RELEASE_URL = 'https://github.com/rizkirmdhnnn/mailriz/releases/latest/download/mailriz-worker.tar.gz';
 
@@ -56,6 +69,18 @@ interface Config {
    *  vars — an empty ACCESS_AUD makes it reject every request. */
   access_aud?: string;
   access_team_domain?: string;
+  /** Needed to delete the application on teardown. Older installs recorded
+   *  only the aud tag, so destroy recovers the id by matching instead. */
+  access_app_id?: string;
+  /**
+   * Whether `setup` was the thing that turned Email Routing on for this zone.
+   *
+   * Disabling it removes the MX, SPF and DKIM records Cloudflare added, which
+   * is right when MailRiz put them there and wrong when the zone already
+   * routed mail. Absent on installs from before this was recorded, and
+   * destroy asks rather than guessing.
+   */
+  email_routing_enabled_by_setup?: boolean;
   /**
    * Only present when the operator opted in during setup. It carries delete
    * rights over the Worker, D1 and R2, so it is never stored silently — and
@@ -251,6 +276,26 @@ async function putSessionSecrets(opts: {
   });
 }
 
+/**
+ * The Access application guarding the dashboard, created only if the hostname
+ * does not already have one — two applications on the same hostname means two
+ * aud tags, only one of which the Worker is told to trust.
+ */
+async function ensureAccessApp(
+  token: string,
+  accountId: string,
+  hostname: string,
+  adminEmail: string
+): Promise<{ id: string; aud: string; reused: boolean }> {
+  const existing = findAccessApp(await listAccessApps(token, accountId), hostname);
+  if (existing?.id && existing.aud) {
+    return { id: existing.id, aud: existing.aud, reused: true };
+  }
+  const app = await createAccessApp(token, accountId, 'mailriz', hostname);
+  await createAccessPolicy(token, accountId, app.id, adminEmail);
+  return { id: app.id, aud: app.aud, reused: false };
+}
+
 // ---------------------------------------------------------------- setup
 
 const SCOPE_ROWS = [
@@ -268,6 +313,39 @@ const ACCESS_SCOPE_ROW = '8. Account → Access: Apps and Policies → Edit  (op
 
 async function cmdSetup() {
   banner();
+
+  // Refuse to run over a live installation: setup provisions and then
+  // overwrites config.json wholesale, so a second run against a different
+  // zone would strand the first one's Worker, Custom Domain and Access
+  // application with nothing left on disk pointing at them.
+  if (existsSync(CONFIG_PATH)) {
+    const installed = await loadConfig();
+    if (!installed) {
+      commandHeader('setup');
+      aborted(`${CONFIG_PATH} exists but could not be read.`);
+      hint('It names the Worker, database and buckets of an installation that is');
+      hint('probably still running. Overwriting it would strand them, so repair or');
+      hint('move the file aside deliberately before running setup.');
+      blank();
+      process.exit(1);
+    }
+    commandHeader('setup', installed.dashboard_hostname);
+    aborted('MailRiz is already installed.');
+    rows([
+      ['dashboard', `https://${installed.dashboard_hostname}`],
+      ['inbox', `anything@${installed.zone_name}`],
+      ['installed', new Date(installed.installed_at).toLocaleString()],
+      ['state', CONFIG_PATH],
+    ]);
+    blank();
+    hint('To change auth, the admin email or a broken Access application,');
+    hint(`run ${accent('mailriz-cli reconfigure')} — it reuses this installation.`);
+    blank();
+    hint(`To start over, run ${accent('mailriz-cli destroy')} first. That deletes`);
+    hint('every stored message, so export anything you want to keep.');
+    blank();
+    process.exit(1);
+  }
 
   // ---- pre-flight, before anything is asked of the user
   commandHeader('preflight');
@@ -288,8 +366,8 @@ async function cmdSetup() {
   } catch { cfReachable = false; }
   checkRow(cfReachable, 'cloudflare', cfReachable ? 'api reachable' : 'unreachable — check your network');
 
-  const stateExists = existsSync(CONFIG_PATH);
-  checkRow(true, 'state', stateExists ? CONFIG_PATH : `will be created at ${CONFIG_PATH}`);
+  // The guard above already returned if anything was there.
+  checkRow(true, 'state', `will be created at ${CONFIG_PATH}`);
 
   try {
     const { stdout } = await execFileP('bun', ['--version']);
@@ -385,6 +463,42 @@ async function cmdSetup() {
   }
   const zoneId = zoneObj.id;
 
+  // A deployment can outlive the file describing it — config.json deleted, or
+  // an earlier setup stopped after deploying. The guard above only sees the
+  // local file.
+  blank();
+  const takenOver = await spin(
+    'existing install',
+    async () => {
+      const scripts = await listWorkerScripts(effectiveToken, accountId).catch(() => []);
+      return scripts.some((s) => s.id === WORKER_NAME);
+    },
+    (found) => (found ? `a "${WORKER_NAME}" Worker already exists here` : 'none found')
+  );
+  if (takenOver) {
+    blank();
+    hint(`This account already runs a Worker named "${WORKER_NAME}", but there is no`);
+    hint(`${CONFIG_PATH} describing it.`);
+    blank();
+    hint('Continuing redeploys that Worker, repoints it at the hostname you pick');
+    hint('next, and reuses the existing mailriz database and buckets — which');
+    hint('breaks whichever installation is using them now.');
+    blank();
+    const proceed = (await confirm({
+      message: 'Take over the existing deployment?',
+      initialValue: false,
+    })) as boolean;
+    if (isCancel(proceed)) process.exit(0);
+    if (!proceed) {
+      aborted('Left alone — nothing was changed.');
+      hint('If this deployment is yours and you want it gone, restore its');
+      hint('config.json and run `destroy`, or remove the Worker, D1 database and');
+      hint('mailriz-* buckets from the Cloudflare dashboard first.');
+      blank();
+      process.exit(1);
+    }
+  }
+
   // ---- configuration
   heading('Configuration');
   const dashboardHostname = (await text({
@@ -451,7 +565,7 @@ async function cmdSetup() {
   // ---- provisioning: one live task block owns the screen from here on.
   // Nothing interactive may print until tasks.stop(); warnings are queued and
   // shown underneath so long text can't tear the redrawn rows.
-  const workerName = 'mailriz';
+  const workerName = WORKER_NAME;
 
   blank();
   commandHeader('setup', `${accountObj.name} / ${zoneObj.name}`);
@@ -564,12 +678,13 @@ async function cmdSetup() {
 
   // Access, before the deploy — its aud tag ships as a Worker var.
   let accessAud = '';
+  let accessAppId = '';
   if (useAccess) {
     tasks.run('access', 'creating application…');
     try {
-      const app = await createAccessApp(effectiveToken, accountId, 'mailriz', dashboardHostname);
-      await createAccessPolicy(effectiveToken, accountId, app.id, adminEmail);
+      const app = await ensureAccessApp(effectiveToken, accountId, dashboardHostname, adminEmail);
       accessAud = app.aud;
+      accessAppId = app.id;
       tasks.ok('access', `single-user · ${adminEmail}`);
     } catch (e: any) {
       // Falling through with an empty aud would deploy a Worker that rejects
@@ -630,9 +745,15 @@ async function cmdSetup() {
 
   // Email Routing. Non-fatal, but mail won't arrive until it's on.
   tasks.run('routing', 'enabling catch-all…');
+  // Recorded so teardown knows whether the zone's MX records are ours to
+  // remove.
+  let routingEnabledByUs = false;
   try {
     const settings = await getEmailRoutingSettings(effectiveToken, zoneId);
-    if (!settings.enabled) await enableEmailRouting(effectiveToken, zoneId);
+    if (!settings.enabled) {
+      await enableEmailRouting(effectiveToken, zoneId);
+      routingEnabledByUs = true;
+    }
     await setCatchAllToWorker(effectiveToken, zoneId, workerName);
     tasks.ok('routing', `*@${zoneObj.name} → ${workerName}`);
   } catch (e: any) {
@@ -682,6 +803,8 @@ async function cmdSetup() {
     auth_mode: authMode,
     access_aud: accessAud || undefined,
     access_team_domain: teamDomain || undefined,
+    access_app_id: accessAppId || undefined,
+    email_routing_enabled_by_setup: routingEnabledByUs,
     installed_at: new Date().toISOString(),
   };
   await saveConfig(cfg);
@@ -760,11 +883,6 @@ async function probeHealth(
   return false;
 }
 
-async function sha256(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 function readdirSorted(dir: string): Promise<string[]> {
   return import('node:fs/promises').then((fs) => fs.readdir(dir).then((f) => f.sort()));
 }
@@ -789,7 +907,7 @@ async function cmdStatus() {
           : // The Worker verifies Access JWTs against this domain's keys, so an
             // empty value rejects every request. Say so here rather than
             // leaving a locked-out dashboard to be guessed at.
-            'Cloudflare Access — NO TEAM DOMAIN, run `setup` to repair'
+            'Cloudflare Access — NO TEAM DOMAIN, run `reconfigure` to repair'
         : 'session password',
     ],
     ['worker', cfg.worker_name],
@@ -832,7 +950,8 @@ async function cmdUpdate() {
     blank();
     checkRow(false, 'access', 'no aud tag recorded for this installation');
     hint('  This install predates aud being saved. Redeploying would leave the');
-    hint('  Worker rejecting every request. Re-run `setup` instead of `update`.');
+    hint('  Worker rejecting every request. Run `reconfigure` instead — it');
+    hint('  re-reads the Access application and keeps your mail.');
     blank();
     fail('Refusing to update — see above.');
   }
@@ -966,7 +1085,236 @@ async function cmdUpdate() {
   ]);
 }
 
+// ---------------------------------------------------------------- reconfigure
+
+/**
+ * Repair or change an existing installation in place. `setup` used to double
+ * as this, which is why it never refused to run twice; this reuses the
+ * recorded account, zone, database and buckets, and touches only what a
+ * repair needs — auth, admin email, Access application, deployed Worker.
+ */
+async function cmdReconfigure() {
+  banner();
+  const cfg = await loadConfig();
+  if (!cfg) fail('Not installed. Run `mailriz-cli setup` first.');
+
+  commandHeader('reconfigure', cfg.dashboard_hostname);
+  hint('Reuses this installation — the database and buckets are not touched.');
+  hint(`Zone ${cfg.zone_name} and hostname ${cfg.dashboard_hostname} are fixed;`);
+  hint('changing either means destroy and setup.');
+  blank();
+
+  const token = await promptToken(cfg, 'to reconfigure');
+  blank();
+
+  try {
+    await spin('token', () => verifyToken(token), (v) => `valid · ${v.id}`);
+  } catch (e: any) {
+    fail(`Token verification failed: ${e.message}`);
+  }
+
+  const adminEmail = (await text({
+    message: 'Admin email',
+    placeholder: cfg.admin_email,
+    initialValue: cfg.admin_email,
+    validate: (v) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v || '') ? undefined : 'Invalid email'),
+  })) as string;
+  if (isCancel(adminEmail)) process.exit(0);
+
+  blank();
+  let teamDomain = '';
+  let accessAvailable = false;
+  try {
+    const org = await spin(
+      'zero trust',
+      () => getAccessOrganization(token, cfg.account_id),
+      (o) => o.auth_domain || 'available'
+    );
+    teamDomain = org.auth_domain || '';
+    accessAvailable = true;
+  } catch {
+    hint('  Access needs a token with Zero Trust permissions. Password auth');
+    hint('  works without them.');
+  }
+  blank();
+
+  const useAccess = accessAvailable
+    ? ((await confirm({
+        message: 'Use Cloudflare Access for auth? (recommended)',
+        initialValue: cfg.auth_mode === 'access',
+      })) as boolean)
+    : false;
+  if (isCancel(useAccess)) process.exit(0);
+
+  const authMode: 'access' | 'session' = useAccess ? 'access' : 'session';
+  let sessionHash: string | undefined;
+  let signingKey: string | undefined;
+  if (!useAccess) {
+    hint('min 12 chars');
+    const pw = (await password({
+      message: accessAvailable ? 'Set a dashboard password' : 'Set a dashboard password (Access unavailable)',
+      validate: (v) => (v && v.length >= 12 ? undefined : 'min 12 chars'),
+    })) as string;
+    if (isCancel(pw)) process.exit(0);
+    sessionHash = await hashPassword(pw);
+    signingKey = generateSigningKey();
+  }
+
+  blank();
+  const tasks = new TaskList([
+    { key: 'release', label: 'release' },
+    { key: 'migrations', label: 'migrations' },
+    { key: 'access', label: 'access' },
+    { key: 'worker', label: 'worker' },
+    { key: 'routing', label: 'email routing' },
+    { key: 'health', label: 'health' },
+  ]);
+  tasks.start();
+
+  const abort: (msg: string) => never = (msg) => { tasks.stop(); fail(msg); };
+
+  tasks.run('release', 'downloading latest…');
+  let release: { dir: string; index: string; migrationsDir: string; assetsDir: string };
+  try {
+    release = await fetchReleaseAsset();
+  } catch (e: any) {
+    tasks.failTask('release', e.message);
+    abort(`Release fetch failed: ${e.message}`);
+  }
+  tasks.ok('release', 'worker bundle ready');
+
+  tasks.run('migrations', 'checking…');
+  try {
+    const files = existsSync(release.migrationsDir) ? await readdirSorted(release.migrationsDir) : [];
+    const applied = await applyMigrations(
+      (sql) => d1Query(token, cfg.account_id, cfg.d1_database_id, sql),
+      release.migrationsDir,
+      files
+    );
+    tasks.ok('migrations', applied.length > 0 ? `${applied.length} applied` : 'up to date');
+  } catch (e: any) {
+    tasks.failTask('migrations', e.message);
+    abort(`Migration failed: ${e.message}`);
+  }
+
+  let accessAud = '';
+  let accessAppId = '';
+  if (useAccess) {
+    tasks.run('access', 'checking application…');
+    try {
+      const app = await ensureAccessApp(token, cfg.account_id, cfg.dashboard_hostname, adminEmail);
+      accessAud = app.aud;
+      accessAppId = app.id;
+      if (app.reused && adminEmail !== cfg.admin_email) {
+        tasks.warn('access', `reused · ${accessAppId.slice(0, 8)}`, {
+          title: 'Access policy not updated',
+          body:
+            `An application already guards ${cfg.dashboard_hostname}, so it was reused\n` +
+            `rather than duplicated. Its policy still names ${cfg.admin_email}.\n` +
+            `Update it under Zero Trust → Access → Applications to admit ${adminEmail}.`,
+        });
+      } else {
+        tasks.ok('access', app.reused ? `reused · ${adminEmail}` : `created · ${adminEmail}`);
+      }
+    } catch (e: any) {
+      tasks.failTask('access', e.message);
+      abort(
+        `Cloudflare Access setup failed: ${e.message}\n` +
+        `  Without an audience tag the Worker rejects every request, so this stops here.`
+      );
+    }
+  } else {
+    tasks.skip('access', 'password auth');
+  }
+
+  tasks.run('worker', 'redeploying…');
+  try {
+    await deployWithWrangler({
+      token,
+      accountId: cfg.account_id,
+      workerName: cfg.worker_name,
+      releaseDir: release.dir,
+      d1Id: cfg.d1_database_id,
+      r2Raw: cfg.r2_raw_bucket,
+      r2Att: cfg.r2_attachments_bucket,
+      r2Html: cfg.r2_html_bucket,
+      adminEmail,
+      dashboardHostname: cfg.dashboard_hostname,
+      mailDomain: cfg.zone_name,
+      authMode,
+      accessAud,
+      accessTeamDomain: teamDomain,
+    });
+    if (authMode === 'session') {
+      await putSessionSecrets({
+        token,
+        accountId: cfg.account_id,
+        releaseDir: release.dir,
+        passwordHash: sessionHash!,
+        signingKey: signingKey!,
+      });
+    }
+  } catch (e: any) {
+    tasks.failTask('worker', e.message);
+    abort(`Worker deploy failed: ${e.message}`);
+  }
+  tasks.ok('worker', `${cfg.worker_name} → ${cfg.dashboard_hostname}`);
+
+  // A rename or a manual edit in the dashboard can leave the catch-all
+  // pointing somewhere else; put it back rather than leaving mail undelivered.
+  tasks.run('routing', 'checking catch-all…');
+  let routingEnabledByUs = cfg.email_routing_enabled_by_setup;
+  try {
+    const settings = await getEmailRoutingSettings(token, cfg.zone_id);
+    if (!settings.enabled) {
+      await enableEmailRouting(token, cfg.zone_id);
+      routingEnabledByUs = true;
+    }
+    if (!catchAllTargets(await getCatchAllRule(token, cfg.zone_id).catch(() => null), cfg.worker_name)) {
+      await setCatchAllToWorker(token, cfg.zone_id, cfg.worker_name);
+      tasks.ok('routing', `*@${cfg.zone_name} → ${cfg.worker_name} (restored)`);
+    } else {
+      tasks.ok('routing', `*@${cfg.zone_name} → ${cfg.worker_name}`);
+    }
+  } catch (e: any) {
+    tasks.warn('routing', 'needs manual setup', {
+      title: 'Email Routing not configured — mail will not arrive',
+      body: `${e.message}\n\nSet the catch-all action to Worker "${cfg.worker_name}" by hand.`,
+    });
+  }
+
+  tasks.run('health', 'probing /healthz…');
+  const healthy = await probeHealth(cfg.dashboard_hostname, (a, t) =>
+    tasks.run('health', `probing /healthz… (${a}/${t})`)
+  );
+  if (healthy) tasks.ok('health', 'responding');
+  else tasks.warn('health', 'not responding yet');
+
+  tasks.stop();
+
+  await saveConfig({
+    ...cfg,
+    // Refresh a saved token with the one that just worked, so rotating a
+    // credential does not leave the revoked one on disk for `destroy` to
+    // fail on later. A config that never stored a token still doesn't.
+    api_token: cfg.api_token ? token : undefined,
+    admin_email: adminEmail,
+    auth_mode: authMode,
+    access_aud: accessAud || undefined,
+    access_team_domain: teamDomain || undefined,
+    access_app_id: accessAppId || undefined,
+    email_routing_enabled_by_setup: routingEnabledByUs,
+  });
+
+  finished('Reconfigured', [
+    ['dashboard', accent(`https://${cfg.dashboard_hostname}`)],
+    ['auth', authMode === 'access' ? `Cloudflare Access · ${adminEmail}` : `password · ${adminEmail}`],
+    ['data', 'preserved — D1 and R2 untouched'],
+  ]);
+}
+
 // ---------------------------------------------------------------- destroy
+
 
 async function cmdDestroy() {
   banner();
@@ -974,18 +1322,123 @@ async function cmdDestroy() {
   if (!cfg) fail('Not installed.');
 
   commandHeader('destroy', cfg.dashboard_hostname);
-  console.log(`  ${pc.red(pc.bold('This is irreversible.'))} ${pc.dim('It permanently deletes:')}`);
-  blank();
-  rows([
-    ['worker', cfg.worker_name],
-    ['d1', `${cfg.d1_database_id.slice(0, 8)} — every stored email`],
-    ['r2', `${cfg.r2_raw_bucket}, ${cfg.r2_attachments_bucket}, ${cfg.r2_html_bucket}`],
-    ['state', CONFIG_PATH],
-  ]);
-  blank();
-  hint(`Email Routing rules and the Access application are left in place.`);
+  console.log(`  ${pc.red(pc.bold('This is irreversible.'))} ${pc.dim('There is no backup and no undo.')}`);
   blank();
 
+  const token = await promptToken(cfg, 'to delete everything');
+
+  // Verify before anything else: a revoked token used to sail through every
+  // DELETE, each one failing and each one reported as "deleted".
+  blank();
+  let tokenId: string;
+  try {
+    tokenId = (await spin('token', () => verifyToken(token), (v) => `valid · ${v.id}`)).id;
+  } catch (e: any) {
+    fail(
+      `Token verification failed: ${e.message}\n` +
+      `  Nothing was deleted. Check the token has not been revoked.`
+    );
+  }
+
+  // S3 credentials for emptying the buckets, derived from the same token.
+  let r2: R2Client | null = null;
+  try {
+    r2 = createR2Client(cfg.account_id, await deriveS3Credentials(tokenId, token));
+  } catch {
+    r2 = null;
+  }
+
+  let inv: Inventory;
+  /** Non-fatal lookup failures — the preview below has a hole in it. */
+  const inventoryNotes: string[] = [];
+  try {
+    inv = await spin(
+      'inventory',
+      () => takeInventory(cfg, token, r2, (m) => inventoryNotes.push(m)),
+      () => 'read from Cloudflare'
+    );
+  } catch (e: any) {
+    fail(`Could not read the installation: ${e.message}\n  Nothing was deleted.`);
+  }
+  for (const n of inventoryNotes) hint(`  ${n}`);
+
+  // What is really there, not what config.json claims.
+  blank();
+  heading('This will permanently delete');
+  const storedObjects = [...inv.buckets.values()].reduce<number>(
+    (n, c) => (typeof c === 'number' && c > 0 ? n + c : n),
+    0
+  );
+  rows([
+    ['worker', inv.workerExists ? cfg.worker_name : pc.dim(`${cfg.worker_name} — already gone`)],
+    [
+      'dns',
+      inv.domains.length
+        ? `${cfg.dashboard_hostname} — custom domain and its record`
+        : pc.dim(`${cfg.dashboard_hostname} — already gone`),
+    ],
+    [
+      'd1',
+      inv.d1Exists
+        ? `${cfg.d1_database_id.slice(0, 8)} — every stored email`
+        : pc.dim(`${cfg.d1_database_id.slice(0, 8)} — already gone`),
+    ],
+  ]);
+  for (const name of bucketsOf(cfg)) {
+    rows([['r2', `${name} — ${describeBucket(inv.buckets.get(name), inv.bucketsTruncated.has(name))}`]]);
+  }
+  if (cfg.auth_mode === 'access') {
+    rows([['access', inv.accessAppId ? `application ${inv.accessAppId.slice(0, 8)}` : pc.dim('no application found')]]);
+  }
+  rows([['state', CONFIG_PATH]]);
+
+  // The buckets are the part people do not picture: D1 holds the metadata,
+  // R2 holds the messages themselves.
+  blank();
+  const unreadable = [...inv.buckets.values()].some((c) => c === UNREADABLE);
+  if (storedObjects > 0 || inv.bucketsTruncated.size > 0) {
+    console.log(
+      `  ${pc.red(pc.bold('R2 data will be erased.'))} ` +
+      pc.dim('Every raw message, attachment and HTML')
+    );
+    hint('body is deleted from the buckets before the buckets themselves go.');
+    hint('That is the complete archive — nothing is exported first.');
+  } else if (unreadable) {
+    console.log(
+      `  ${pc.red(pc.bold('R2 data will be erased.'))} ` +
+      pc.dim('The buckets exist but their contents')
+    );
+    hint('could not be listed, so how much mail is in them is unknown. Everything');
+    hint('found in them will be deleted.');
+  } else {
+    hint('The buckets hold no objects, so there is no stored mail to lose.');
+  }
+
+  // Email Routing: only remove what MailRiz put there.
+  blank();
+  let disableRouting = false;
+  const choice = routingChoice(inv.routingEnabled, cfg.email_routing_enabled_by_setup);
+  if (choice === 'disable') {
+    disableRouting = true;
+    hint('Email Routing was enabled by setup, so it will be turned off and its');
+    hint(`MX, SPF and DKIM records removed from ${cfg.zone_name}.`);
+  } else if (choice === 'keep' && inv.routingEnabled) {
+    hint('Email Routing was already on before MailRiz, so it stays on. Only the');
+    hint('catch-all rule pointing at the Worker is removed.');
+  } else if (choice === 'ask') {
+    hint('This installation predates MailRiz recording whether it enabled Email');
+    hint(`Routing on ${cfg.zone_name}. Turning it off removes the MX, SPF and DKIM`);
+    hint('records, which breaks mail if the zone used routing before MailRiz.');
+    blank();
+    const answer = (await confirm({
+      message: `Turn Email Routing off for ${cfg.zone_name} too?`,
+      initialValue: false,
+    })) as boolean;
+    if (isCancel(answer)) process.exit(0);
+    disableRouting = answer;
+  }
+
+  blank();
   // Typing the hostname beats a second yes/no — it can't be muscle-memoried.
   const typed = (await text({
     message: `Type the dashboard hostname to confirm`,
@@ -997,44 +1450,197 @@ async function cmdDestroy() {
     process.exit(0);
   }
 
-  const token = await promptToken(cfg, 'to delete everything');
-
   blank();
-  const del = (url: string) =>
-    fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
-  const api = `https://api.cloudflare.com/client/v4/accounts/${cfg.account_id}`;
-
   const tasks = new TaskList([
+    { key: 'routing', label: 'email routing' },
+    { key: 'dns', label: 'dns' },
     { key: 'worker', label: 'worker' },
-    { key: 'd1', label: 'd1' },
+    { key: 'access', label: 'access' },
     { key: 'r2', label: 'r2' },
+    { key: 'd1', label: 'd1' },
+    { key: 'verify', label: 'verify' },
     { key: 'state', label: 'state' },
   ]);
   tasks.start();
 
-  tasks.run('worker', 'deleting…');
-  await del(`${api}/workers/scripts/${cfg.worker_name}`);
-  tasks.ok('worker', 'deleted');
+  /** Steps that did not complete. The config file survives if this is non-empty. */
+  const failures: string[] = [];
+  const record = (label: string, e: unknown) => {
+    failures.push(`${label}: ${(e as Error).message}`);
+  };
+
+  // Catch-all first: once the Worker is gone a rule still pointing at it
+  // black-holes every message the domain receives.
+  tasks.run('routing', 'releasing catch-all…');
+  if (inv.unreadable.includes('email routing')) {
+    // Not "not enabled" — the state was never read.
+    tasks.warn('routing', 'state unreadable — catch-all not touched');
+  } else if (!inv.routingEnabled) {
+    tasks.skip('routing', 'not enabled');
+  } else {
+    try {
+      if (inv.catchAllPointsAtWorker) await clearCatchAll(token, cfg.zone_id);
+      if (disableRouting) {
+        await disableEmailRouting(token, cfg.zone_id);
+        tasks.ok('routing', `disabled · MX and SPF removed from ${cfg.zone_name}`);
+      } else {
+        tasks.ok('routing', inv.catchAllPointsAtWorker ? 'catch-all released' : 'nothing pointed here');
+      }
+    } catch (e) {
+      tasks.failTask('routing', (e as Error).message);
+      record('email routing', e);
+    }
+  }
+
+  // Custom Domain before the script: it owns the DNS record, and deleting the
+  // Worker does not reliably take it along.
+  tasks.run('dns', 'removing custom domain…');
+  if (inv.unreadable.includes('custom domain')) {
+    tasks.warn('dns', 'could not be listed — record may remain');
+  } else if (inv.domains.length === 0) {
+    tasks.skip('dns', 'no custom domain found');
+  } else {
+    try {
+      for (const d of inv.domains) await deleteWorkerDomain(token, cfg.account_id, d.id);
+      tasks.ok('dns', `${cfg.dashboard_hostname} detached`);
+    } catch (e) {
+      tasks.failTask('dns', (e as Error).message);
+      record('custom domain', e);
+    }
+  }
+
+  tasks.run('worker', 'deleting script…');
+  try {
+    const outcome = await deleteWorkerScript(token, cfg.account_id, cfg.worker_name);
+    tasks.ok('worker', outcome === 'absent' ? 'was already gone' : 'deleted');
+  } catch (e) {
+    tasks.failTask('worker', (e as Error).message);
+    record('worker', e);
+  }
+
+  tasks.run('access', 'removing application…');
+  if (inv.unreadable.includes('access application')) {
+    tasks.warn('access', 'could not be listed — application may remain');
+  } else if (!inv.accessAppId) {
+    tasks.skip('access', cfg.auth_mode === 'access' ? 'no application found' : 'password auth');
+  } else {
+    try {
+      const outcome = await deleteAccessApp(token, cfg.account_id, inv.accessAppId);
+      tasks.ok('access', outcome === 'absent' ? 'was already gone' : 'deleted');
+    } catch (e) {
+      tasks.failTask('access', (e as Error).message);
+      record('access application', e);
+    }
+  }
+
+  // Empty, then delete: Cloudflare rejects the bucket delete while objects
+  // remain.
+  tasks.run('r2', 'emptying buckets…');
+  const allBuckets = bucketsOf(cfg);
+  let purged = 0;
+  let bucketsGone = 0;
+  let alreadyGone = 0;
+  for (const name of allBuckets) {
+    if (inv.buckets.get(name) === null) {
+      alreadyGone++;
+      continue;
+    }
+    try {
+      if (r2) {
+        const n = await emptyBucket(r2, name, (d) =>
+          tasks.run('r2', `emptying ${name}… ${purged + d} objects`)
+        );
+        purged += n;
+      }
+      tasks.run('r2', `deleting ${name}…`);
+      await deleteR2Bucket(token, cfg.account_id, name);
+      bucketsGone++;
+    } catch (e) {
+      record(`r2 bucket ${name}`, e);
+    }
+  }
+  const objects = `${purged} object${purged === 1 ? '' : 's'} deleted`;
+  if (failures.some((f) => f.startsWith('r2 bucket'))) {
+    tasks.failTask('r2', `${bucketsGone + alreadyGone}/${allBuckets.length} removed · ${objects}`);
+  } else {
+    tasks.ok(
+      'r2',
+      alreadyGone
+        ? `${bucketsGone} removed · ${alreadyGone} already gone · ${objects}`
+        : `${bucketsGone} buckets removed · ${objects}`
+    );
+  }
 
   tasks.run('d1', 'deleting database…');
-  await del(`${api}/d1/database/${cfg.d1_database_id}`);
-  tasks.ok('d1', 'deleted');
-
-  tasks.run('r2', 'deleting 3 buckets…');
-  for (const b of [cfg.r2_raw_bucket, cfg.r2_attachments_bucket, cfg.r2_html_bucket]) {
-    await del(`${api}/r2/buckets/${b}`);
+  try {
+    const outcome = await deleteD1(token, cfg.account_id, cfg.d1_database_id);
+    tasks.ok('d1', outcome === 'absent' ? 'was already gone' : 'deleted');
+  } catch (e) {
+    tasks.failTask('d1', (e as Error).message);
+    record('d1 database', e);
   }
-  tasks.ok('r2', 'deleted');
 
+  // Every row above reports what its own call returned; this is the only step
+  // that checks the account actually looks empty.
+  tasks.run('verify', 're-reading account…');
+  let leftover: string[] = [];
+  try {
+    leftover = leftovers(await takeInventory(cfg, token, r2, () => {}), cfg);
+    tasks.set(
+      'verify',
+      leftover.length ? 'fail' : 'ok',
+      leftover.length ? `${leftover.length} still present` : 'account is clean'
+    );
+  } catch (e) {
+    tasks.failTask('verify', (e as Error).message);
+    record('verification', e);
+  }
+
+  // The config file is the only record of what belongs to this installation,
+  // so removing it while anything survives makes the leftovers unfindable.
+  const clean = failures.length === 0 && leftover.length === 0;
   tasks.run('state', 'removing config…');
-  await rm(CONFIG_PATH, { force: true }).catch(() => {});
-  tasks.ok('state', 'removed');
+  if (clean) {
+    try {
+      await rm(CONFIG_PATH, { force: true });
+      // The extracted release otherwise sits in ~/.mailriz/.temp indefinitely.
+      await rm(TMP_DIR, { recursive: true, force: true });
+      tasks.ok('state', 'config and cached release removed');
+    } catch (e) {
+      tasks.failTask('state', (e as Error).message);
+      record('config file', e);
+    }
+  } else {
+    tasks.warn('state', 'kept — teardown incomplete');
+  }
 
   tasks.stop();
 
-  finished('Destroyed', [
-    ['left behind', 'Email Routing rules · Access application'],
-  ], 'Remove those in the Cloudflare dashboard if you no longer need them.');
+  if (clean) {
+    finished('Destroyed', destroySummary({
+      hostname: cfg.dashboard_hostname,
+      zoneName: cfg.zone_name,
+      purged,
+      bucketsRemoved: bucketsGone,
+      workerWasPresent: inv.workerExists,
+      domainWasPresent: inv.domains.length > 0,
+      d1WasPresent: inv.d1Exists,
+      routingWasEnabled: inv.routingEnabled,
+      routingDisabled: disableRouting,
+      catchAllWasPointing: inv.catchAllPointsAtWorker,
+    }), 'The edge certificate for the hostname is not removed by this API — drop it\nunder SSL/TLS → Edge Certificates if you want it gone.');
+    return;
+  }
+
+  blank();
+  aborted('Teardown incomplete — nothing was assumed deleted.');
+  for (const f of failures) bullet(f);
+  for (const l of leftover) bullet(`still present: ${l}`);
+  blank();
+  hint(`${CONFIG_PATH} was kept so you can run destroy again once the cause is`);
+  hint('fixed — usually a token missing a scope, or one that has been revoked.');
+  blank();
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------- main
@@ -1043,7 +1649,8 @@ const COMMANDS: [string, string][] = [
   ['setup', 'Deploy end-to-end — Worker, D1, R2, DNS, Email Routing, Access'],
   ['status', 'Show the installation and probe the Worker'],
   ['update', 'Move the Worker to the latest release, keeping all data'],
-  ['destroy', 'Delete the Worker, database, and stored mail'],
+  ['reconfigure', 'Change auth, admin email or repair Access — keeps all data'],
+  ['destroy', 'Delete the Worker, DNS, database and every stored message'],
 ];
 
 function cmdHelp(unknown?: string): void {
@@ -1063,6 +1670,7 @@ const cmd = process.argv[2] || 'setup';
 if (cmd === 'setup') cmdSetup();
 else if (cmd === 'status') cmdStatus();
 else if (cmd === 'update') cmdUpdate();
+else if (cmd === 'reconfigure') cmdReconfigure();
 else if (cmd === 'destroy') cmdDestroy();
 else if (['help', '--help', '-h'].includes(cmd)) cmdHelp();
 else {

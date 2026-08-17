@@ -10,10 +10,11 @@ bunx mailriz-cli setup
 ## Commands
 
 ```bash
-mailriz-cli setup     # deploy end-to-end
-mailriz-cli status    # check worker + config health
-mailriz-cli update    # update worker to the latest release (data preserved)
-mailriz-cli destroy   # tear down everything (double-confirm)
+mailriz-cli setup        # deploy end-to-end (refuses if already installed)
+mailriz-cli status       # check worker + config health
+mailriz-cli update       # update worker to the latest release (data preserved)
+mailriz-cli reconfigure  # change auth, admin email, repair Access (data preserved)
+mailriz-cli destroy      # tear down everything, DNS and R2 included
 ```
 
 ## What `setup` does

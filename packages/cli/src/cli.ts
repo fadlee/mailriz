@@ -1615,7 +1615,7 @@ async function cmdDestroy(domain?: string) {
   // so removing it while anything survives makes the leftovers unfindable.
   const clean = failures.length === 0 && leftover.length === 0;
   tasks.run('state', 'removing config…');
-  const targetConfigPath = cfg._filePath || configPathFor(CONFIG_DIR, cfg.zone_name);
+
   if (clean) {
     try {
       await rm(targetConfigPath, { force: true });
@@ -1662,9 +1662,7 @@ async function cmdDestroy(domain?: string) {
   aborted('Teardown incomplete — nothing was assumed deleted.');
   for (const f of failures) bullet(f);
   for (const l of leftover) bullet(`still present: ${l}`);
-  blank();
-  const configHintPath = cfg._filePath || configPathFor(CONFIG_DIR, cfg.zone_name);
-  hint(`${configHintPath} was kept so you can run destroy again once the cause is`);
+  hint(`${targetConfigPath} was kept so you can run destroy again once the cause is`);
   hint('fixed — usually a token missing a scope, or one that has been revoked.');
   blank();
   process.exit(1);

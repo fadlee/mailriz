@@ -576,13 +576,10 @@ async function cmdSetup() {
 
   // ---- provisioning: one live task block owns the screen from here on.
   // Nothing interactive may print until tasks.stop(); warnings are queued and
-  const workerName = resourceNames.workerName;
   const d1Name = resourceNames.d1Name;
   const r2RawName = resourceNames.r2Raw;
   const r2AttName = resourceNames.r2Att;
   const r2HtmlName = resourceNames.r2Html;
-
-
   blank();
   commandHeader('setup', `${accountObj.name} / ${zoneObj.name}`);
 

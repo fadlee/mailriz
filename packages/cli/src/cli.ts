@@ -396,12 +396,13 @@ async function cmdSetup() {
     { key: 'workers_scripts', type: 'edit' },
     { key: 'd1', type: 'edit' },
     { key: 'workers_r2', type: 'edit' },
+    { key: 'access', type: 'edit' },
+    { key: 'access_acct', type: 'edit' },
+    { key: 'zone', type: 'read' },
     { key: 'workers_routes', type: 'edit' },
     { key: 'email_routing_rules', type: 'edit' },
     { key: 'dns', type: 'edit' },
     { key: 'zone_settings', type: 'edit' },
-    { key: 'access', type: 'edit' },
-    { key: 'access_acct', type: 'edit' },
   ];
   const tokenUrl = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(
     JSON.stringify(permissions)

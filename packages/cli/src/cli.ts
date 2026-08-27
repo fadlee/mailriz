@@ -352,8 +352,8 @@ async function cmdSetup() {
   } catch { cfReachable = false; }
   checkRow(cfReachable, 'cloudflare', cfReachable ? 'api reachable' : 'unreachable — check your network');
 
-  // The guard above already returned if anything was there.
-  checkRow(true, 'state', `will be created at ${CONFIG_PATH}`);
+  // The state file will be placed in the config directory.
+  checkRow(true, 'state', `will be created in ${CONFIG_DIR}`);
 
   try {
     const { stdout } = await execFileP('bun', ['--version']);
@@ -1404,7 +1404,8 @@ async function cmdDestroy(domain?: string) {
   if (cfg.auth_mode === 'access') {
     rows([['access', inv.accessAppId ? `application ${inv.accessAppId.slice(0, 8)}` : pc.dim('no application found')]]);
   }
-  rows([['state', CONFIG_PATH]]);
+  const targetConfigPath = cfg._filePath || configPathFor(CONFIG_DIR, cfg.zone_name);
+  rows([['state', targetConfigPath]]);
 
   // The buckets are the part people do not picture: D1 holds the metadata,
   // R2 holds the messages themselves.

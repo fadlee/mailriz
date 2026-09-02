@@ -391,8 +391,26 @@ async function cmdSetup() {
   for (const row of SCOPE_ROWS) bullet(row);
   bullet(ACCESS_SCOPE_ROW);
   blank();
-  hint('Token page (name is pre-filled):');
-  const tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens?name=mailriz-cli';
+  hint('Token page (permissions and name are pre-filled):');
+  // Pre-fill exact Cloudflare token permission groups required for setup,
+  // deployment, email routing configuration, and clean teardown.
+  const permissions = [
+    // Account level
+    { key: 'workers_scripts', type: 'edit' },
+    { key: 'd1', type: 'edit' },
+    { key: 'workers_r2', type: 'edit' },
+    { key: 'access', type: 'edit' },
+    { key: 'access_acct', type: 'edit' },
+    // Zone level
+    { key: 'zone', type: 'read' },
+    { key: 'workers_routes', type: 'edit' },
+    { key: 'email_routing_rules', type: 'edit' },
+    { key: 'dns', type: 'edit' },
+    { key: 'zone_settings', type: 'edit' },
+  ];
+  const tokenUrl = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(
+    JSON.stringify(permissions)
+  )}&accountId=*&zoneId=all&name=mailriz-cli`;
   link(tokenUrl);
   blank();
 
